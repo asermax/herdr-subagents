@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createRegistrar, type Registrar, type RegisterPayload } from "./registrar.js";
 
-// Child-side role of the herdr-subagents pi extension. Owns onboarding
-// injection only (spec §6); stands up the factory #21/#22 extend. No herdr
-// socket client lives here (the helper is the only one — spec §3).
+// herdr-subagents pi extension. This slice owns the agent-resolution role
+// (spec §7/§8): the `--agent` flag, the registrar that resolves
+// `.claude/agents/*.md`, and the `pi.events` presence handshake. The child-side
+// onboarding injection (spec §6) lives here too. No herdr socket client lives
+// here — the helper is the only one (spec §3).
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -29,10 +32,84 @@ function readOnboarding(): string {
   );
 }
 
+// Bus channels (spec §8), prefixed with the unscoped package name. The provider
+// (this extension) and the consumer (`pi-cc-plugins`, separate repo) use these
+// to find each other and to carry registrations.
+const PKG = "pi-herdr-subagents";
+export const PROVIDER_READY = `${PKG}:provider-ready`;
+export const PROVIDER_READY_REQUEST = `${PKG}:provider-ready-request`;
+export const REGISTER = `${PKG}:register`;
+
+/** In-process handle for tests and sibling code (#22); pi ignores it. */
+export interface ExtensionHandle {
+  registrar: Registrar;
+  /** True once a consumer announced presence on the bus. */
+  herdrProviderReady(): boolean;
+}
+
+// The most recently created handle. A pi process loads one extension factory per
+// session, so this is single-instance in practice; tests and sibling code read it
+// back to introspect bus state without reaching into the factory closure.
+let currentHandle: ExtensionHandle | undefined;
+
+/** Read back the handle for the active session (tests, #22). */
+export function getHandle(): ExtensionHandle | undefined {
+  return currentHandle;
+}
+
 export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   // Bus subscriptions return an unsubscribe fn (pi's EventBus); drained on
-  // shutdown. #21 and #22 push their unsubs in here when they register.
+  // shutdown. Every `pi.events.on` in this factory pushes its unsub in here.
   const unsubs: Array<() => void> = [];
+
+  // `--agent <name>` carries the child's agent name into the session. herdr
+  // launches the child as `herdr agent start --kind pi -- --agent <name>`; the
+  // flag is registered declaratively so pi matches it against CLI argv (research
+  // §1.1). Same shape as pi's `--fff-mode`: a string flag with no default.
+  pi.registerFlag("agent", { type: "string" });
+
+  const registrar = createRegistrar();
+
+  // Eager emit-both-ways presence handshake (spec §8). Both sides act at
+  // factory time, where load order is not guaranteed, so each emits its own
+  // signal AND listens for the other's; whichever loads second triggers the
+  // first's listener. The flag is correct by session start.
+  //
+  // Signals: the PROVIDER (this extension) owns `provider-ready`; the CONSUMER
+  // (`pi-cc-plugins`) owns `provider-ready-request`. Each side listens for the
+  // other's signal and re-emits its own once on seeing it, so a side that
+  // loaded first is not missed by one that loaded second. The re-emit is
+  // guarded so the two sides cannot ping-pong. The provider never emits the
+  // request and has no ready-listener, which keeps it deaf to its own echo
+  // (pi's bus delivers a self-emit to the emitter's own listeners).
+  let consumerPresent = false;
+
+  // Register listeners BEFORE emitting: a consumer's synchronous re-emit (on
+  // seeing our ready) must find this listener already installed, or its reply
+  // is lost.
+  unsubs.push(
+    pi.events.on(PROVIDER_READY_REQUEST, () => {
+      const wasPresent = consumerPresent;
+      consumerPresent = true;
+      if (!wasPresent) pi.events.emit(PROVIDER_READY, { version: 1 });
+    }),
+  );
+
+  // Announce ourselves. A consumer that loaded before us missed this; it asks
+  // us to repeat it (provider-ready-request), and the listener above re-emits.
+  pi.events.emit(PROVIDER_READY, { version: 1 });
+
+  // Registrations arrive over the bus from pi-cc-plugins (or any other
+  // provider). Each one REPLACES per (source, namespace) rather than
+  // accumulating, so a session switch drops the previous project's agents with
+  // no staleness. Fire-and-forget: no acknowledgement (spec §8).
+  unsubs.push(
+    pi.events.on(REGISTER, (data) => {
+      const payload = data as RegisterPayload;
+      if (!payload || typeof payload !== "object") return;
+      registrar.register(payload);
+    }),
+  );
 
   pi.on("before_agent_start", async (event) => {
     // The gate is implementation-only (CONTEXT.md): presence means "this
@@ -58,4 +135,10 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
       }
     }
   });
+
+  const handle: ExtensionHandle = {
+    registrar,
+    herdrProviderReady: () => consumerPresent,
+  };
+  currentHandle = handle;
 }
