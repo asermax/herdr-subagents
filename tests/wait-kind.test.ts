@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { spawnChild } from "../src/helper/spawn";
 import { waitChild } from "../src/helper/collect";
-import { FakeHerdrClient } from "./fake-client";
+import { FakeHerdrClient, type Call } from "./fake-client";
 import { StubHerdrServer, type ScriptedEvent } from "./stub-server";
 import type { AgentSnapshot } from "../src/helper/herdr-types";
 
@@ -39,7 +39,7 @@ describe("spawn --kind restriction", () => {
         },
         { client, bounds: { deliveryStallMs: 1000 } },
       );
-      const start = client.calls.find((c) => c.method === "agent.start")!;
+      const start = client.calls.find((c: Call) => c.method === "agent.start")!;
       expect(start.args.kind).toBe("claude");
       // claude agent gets --agent <name> argv, no harness swap.
       expect(start.args.args).toEqual(["--agent", "doer"]);
@@ -62,7 +62,7 @@ describe("wait", () => {
       const snap = await waitChild("w1Z:p1", client, 2000);
       // waitChild asks for done|unknown only — blocked is never in the match
       // set, so it could not have returned on it.
-      const wait = client.calls.find((c) => c.method === "events.wait")!;
+      const wait = client.calls.find((c: Call) => c.method === "events.wait")!;
       expect(wait.args.statuses).toEqual(["done", "unknown"]);
       expect(snap.agent_status).toBe("done");
     } finally {
@@ -77,7 +77,7 @@ describe("wait", () => {
       const client = new FakeHerdrClient({ socketPath: server.socketPath });
       server.script([{ paneId: "w1Z:p1", status: "done", seq: 3 }]);
       await waitChild("w1Z:p1", client, 2000);
-      const wait = client.calls.find((c) => c.method === "events.wait")!;
+      const wait = client.calls.find((c: Call) => c.method === "events.wait")!;
       expect(wait.args.statuses).not.toContain("blocked");
     } finally {
       await server.close();

@@ -3,6 +3,9 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
     "types": ["vitest/globals", "node"]
   },
   "include": ["src/**/*.ts", "build/**/*.ts", "tests/**/*.ts"],

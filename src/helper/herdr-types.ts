@@ -62,12 +62,16 @@ export interface HerdrClient {
 }
 
 export class HerdrError extends Error {
+  readonly code: string;
+  override readonly cause: unknown;
   constructor(
-    public readonly code: string,
+    code: string,
     message: string,
-    public readonly cause?: unknown,
+    cause?: unknown,
   ) {
     super(`${code}: ${message}`);
+    this.code = code;
+    this.cause = cause;
     this.name = "HerdrError";
   }
 }

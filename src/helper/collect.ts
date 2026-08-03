@@ -148,8 +148,10 @@ function lastPiAssistant(text: string): string | undefined {
   const lines = text.split("\n").filter((l) => l.trim() !== "");
   for (let i = lines.length - 1; i >= 0; i--) {
     let entry: { type?: string; message?: { role?: string; content?: unknown } };
+    const line = lines[i];
+    if (line === undefined) continue;
     try {
-      entry = JSON.parse(lines[i]);
+      entry = JSON.parse(line);
     } catch {
       continue;
     }
@@ -176,8 +178,10 @@ function lastClaudeAssistant(text: string): string | undefined {
         content?: unknown;
       };
     };
+    const line = lines[i];
+    if (line === undefined) continue;
     try {
-      entry = JSON.parse(lines[i]);
+      entry = JSON.parse(line);
     } catch {
       continue;
     }

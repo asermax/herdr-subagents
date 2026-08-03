@@ -71,10 +71,11 @@ export class FakeHerdrClient implements HerdrClient {
     }
     if (res && "ok" in res) return res.ok;
     // Default: an idle agent.
+    const ws = params.paneId.split(":")[0] ?? "w0";
     return {
       pane_id: params.paneId,
-      tab_id: `${params.paneId.split(":")[0]}:t0`,
-      workspace_id: params.paneId.split(":")[0],
+      tab_id: `${ws}:t0`,
+      workspace_id: ws,
       name: params.name,
       agent: params.kind,
       agent_status: "idle",
@@ -94,11 +95,9 @@ export class FakeHerdrClient implements HerdrClient {
     const renameCount = this.renames[target] ?? 0;
     const nameFn = this.opts.nameAfterRename?.[target];
     const name = nameFn ? nameFn(renameCount) : base.name;
-    return {
-      ...base,
-      name,
-      state_change_seq: seqOverride ?? base.state_change_seq,
-    };
+    const snap: AgentSnapshot = { ...base, name };
+    if (seqOverride !== undefined) snap.state_change_seq = seqOverride;
+    return snap;
   }
 
   async agentRename(target: string, name: string): Promise<void> {

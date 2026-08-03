@@ -80,18 +80,19 @@ interface RawAgent {
 }
 
 function toSnapshot(raw: RawAgent): AgentSnapshot {
-  return {
+  const snap: AgentSnapshot = {
     pane_id: raw.pane_id,
     tab_id: raw.tab_id,
     workspace_id: raw.workspace_id,
     name: raw.name,
     agent: raw.agent,
     agent_status: raw.agent_status,
-    agent_session: raw.agent_session,
-    state_change_seq: raw.state_change_seq,
-    cwd: raw.cwd,
-    interactive_ready: raw.interactive_ready,
   };
+  if (raw.agent_session) snap.agent_session = raw.agent_session;
+  if (raw.state_change_seq !== undefined) snap.state_change_seq = raw.state_change_seq;
+  if (raw.cwd !== undefined) snap.cwd = raw.cwd;
+  if (raw.interactive_ready !== undefined) snap.interactive_ready = raw.interactive_ready;
+  return snap;
 }
 
 export class RealHerdrClient implements HerdrClient {

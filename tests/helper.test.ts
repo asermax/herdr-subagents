@@ -109,7 +109,7 @@ describe("spawn verify-and-rename", () => {
 
     const renames = client.calls.filter((c) => c.method === "agent.rename");
     expect(renames.length).toBe(1);
-    expect(renames[0].args.name).toBe("doer");
+    expect(renames[0]!.args.name).toBe("doer");
   });
 
   it("exhausts rename attempts and reports failure, closing the tab", async () => {
@@ -481,8 +481,9 @@ describe("list stale detection", () => {
 
     const children = await registry.list();
     expect(children).toHaveLength(1);
-    expect(children[0].stale).toBe(true);
-    expect(children[0].pane_id).toBe("w1Z:p9");
+    const child = children[0]!;
+    expect(child.stale).toBe(true);
+    expect(child.pane_id).toBe("w1Z:p9");
   });
 
   it("reports live children with refreshed status", async () => {
@@ -507,7 +508,8 @@ describe("list stale detection", () => {
     });
 
     const children = await registry.list();
-    expect(children[0].stale).toBe(false);
-    expect(children[0].status).toBe("done");
+    const child = children[0]!;
+    expect(child.stale).toBe(false);
+    expect(child.status).toBe("done");
   });
 });
