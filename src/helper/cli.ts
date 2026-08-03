@@ -1,0 +1,182 @@
+#!/usr/bin/env node
+// The helper — the complete interface to delegation, invoked over bash. The
+// only herdr socket client in the system. The pi extension does NOT get one.
+
+import { collectChild, waitChild, type CollectDeps } from "./collect.js";
+import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
+import { HerdrError } from "./herdr-types.js";
+import { fileRegistryStore, Registry } from "./registry.js";
+import { spawnChild, type SpawnResult } from "./spawn.js";
+
+const KINDS = ["pi", "claude"] as const;
+type Kind = (typeof KINDS)[number];
+
+function isKind(v: string): v is Kind {
+  return (KINDS as readonly string[]).includes(v);
+}
+
+function parseArgs(argv: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        out[key] = next;
+        i++;
+      } else {
+        out[key] = "true";
+      }
+    }
+  }
+  return out;
+}
+
+function emit(obj: unknown): void {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+function fail(message: string, code = 1): never {
+  process.stderr.write(`${message}\n`);
+  process.exit(code);
+}
+
+function buildDeps() {
+  const client = clientFromEnv();
+  const probe = (paneId: string) => client.agentGet(paneId);
+  const registry = new Registry(fileRegistryStore(), probe);
+  return { client, registry };
+}
+
+async function main(): Promise<void> {
+  const [subcommand, ...rest] = process.argv.slice(2);
+  const flags = parseArgs(rest);
+
+  switch (subcommand) {
+    case "spawn":
+      return runSpawn(flags);
+    case "prompt":
+      return runPrompt(flags);
+    case "wait":
+      return runWait(flags);
+    case "collect":
+      return runCollect(flags);
+    case "list":
+      return runList();
+    case "close":
+      return runClose(flags);
+    default:
+      fail(
+        `unknown subcommand ${subcommand ?? "(none)"}\n` +
+          "usage: helper <spawn|prompt|wait|collect|list|close> [options]",
+        2,
+      );
+  }
+}
+
+async function runSpawn(flags: Record<string, string>): Promise<void> {
+  // --kind is required and restricted to exactly pi|claude. Anything else is
+  // rejected BEFORE reaching herdr.
+  const kind = flags.kind;
+  if (!kind) fail("--kind is required (pi|claude)", 2);
+  if (!isKind(kind)) fail(`--kind must be one of ${KINDS.join("|")}, got ${kind}`, 2);
+
+  const agentName = flags.agent;
+  if (!agentName) fail("--agent is required (a name, not a path)", 2);
+  // --agent takes a name, never a path.
+  if (agentName.includes("/")) fail(`--agent must be a name, not a path: ${agentName}`, 2);
+
+  const label = flags.label;
+  if (!label) fail("--label is required", 2);
+
+  const body = flags.body ?? "";
+  const cwd = flags.cwd ?? process.cwd();
+  const workspaceId = flags.workspace ?? currentWorkspaceId();
+
+  const { client, registry } = buildDeps();
+  try {
+    const result: SpawnResult = await spawnChild(
+      { kind, agentName, label, cwd, workspaceId, body },
+      { client },
+    );
+    await registry.add({
+      pane_id: result.pane_id,
+      tab_id: result.tab_id,
+      workspace_id: workspaceId,
+      label,
+      agent: agentName,
+      kind,
+      agent_name: agentName,
+      status: "idle",
+    });
+    emit(result);
+  } catch (e) {
+    emit(e);
+    fail(
+      e && typeof e === "object" && "reason" in e
+        ? `spawn failed: ${(e as { message?: string }).message ?? "unknown"}`
+        : `spawn failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
+async function runPrompt(flags: Record<string, string>): Promise<void> {
+  const paneId = restPositional(flags, process.argv.slice(2));
+  if (!paneId) fail("usage: helper prompt <pane_id> --body <text>", 2);
+  const body = flags.body;
+  if (body === undefined) fail("--body is required", 2);
+  const { client } = buildDeps();
+  // The body arrives already wrapped in <supervisor-agent> by the caller.
+  await client.agentPrompt(paneId, body);
+  emit({ pane_id: paneId, sent: true });
+}
+
+async function runWait(flags: Record<string, string>): Promise<void> {
+  const paneId = restPositional(flags, process.argv.slice(2));
+  if (!paneId) fail("usage: helper wait <pane_id>", 2);
+  const { client } = buildDeps();
+  const timeout = flags.timeout ? Number(flags.timeout) : 0;
+  // wait returns on terminal state (done|gone), NOT on blocked.
+  const snap = await waitChild(paneId, client, timeout);
+  emit({ pane_id: paneId, status: snap.agent_status });
+}
+
+async function runCollect(flags: Record<string, string>): Promise<void> {
+  const paneId = restPositional(flags, process.argv.slice(2));
+  if (!paneId) fail("usage: helper collect <pane_id>", 2);
+  const { client, registry } = buildDeps();
+  const deps: CollectDeps = { client, registry };
+  emit(await collectChild(paneId, deps));
+}
+
+async function runList(): Promise<void> {
+  const { registry } = buildDeps();
+  const children = await registry.list();
+  emit({ children });
+}
+
+async function runClose(flags: Record<string, string>): Promise<void> {
+  const tabId = restPositional(flags, process.argv.slice(2));
+  if (!tabId) fail("usage: helper close <tab_id>", 2);
+  const { client, registry } = buildDeps();
+  await client.tabClose(tabId);
+  // Drop any tracked child whose tab we just closed.
+  for (const child of await registry.list()) {
+    if (child.tab_id === tabId) await registry.remove(child.pane_id);
+  }
+  emit({ tab_id: tabId, closed: true });
+}
+
+// The positional argument is the first non-flag token after the subcommand.
+// parseArgs consumes flag values, so recover the positional from argv directly.
+function restPositional(_flags: Record<string, string>, argv: string[]): string | undefined {
+  const rest = argv.slice(2).filter((a) => !a.startsWith("--"));
+  // The first positional is the subcommand; the second is our argument.
+  return rest[1];
+}
+
+main().catch((e) => {
+  if (e instanceof HerdrError) fail(e.message);
+  fail(e instanceof Error ? e.message : String(e));
+});

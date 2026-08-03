@@ -1,1 +1,3 @@
 .pi/agents/
+node_modules/
+dist/

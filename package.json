@@ -1,0 +1,22 @@
+{
+  "name": "herdr-subagents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Coding-agent subagents as herdr tabs.",
+  "type": "module",
+  "bin": {
+    "herdr-helper": "dist/helper/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
