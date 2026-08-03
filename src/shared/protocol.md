@@ -14,13 +14,13 @@ A child that needs a decision ends its turn with the question wrapped in `<subag
 
 The delegate skill is invoked as `/skill:delegate` on pi and `/delegate` on claude. A child invokes it on its own harness. If you direct a cross-harness child to delegate, name the form for its harness in your prompt.
 
-When a message carries an invocation, the slash command comes **first, outside the `<supervisor-agent>` markers** — it is a harness command, not part of the tagged payload. The tagged block follows it.
+When a message carries an invocation, the slash command comes **first, outside the `<supervisor-agent>` tag** — it is a harness command, not part of the tagged payload. The tagged block follows it.
 
 ---
 
 # Delegate
 
-You drive subagents through a helper CLI that wraps herdr. The helper handles the fragile parts — verifying the spawn landed, confirming the prompt was delivered, tracking pane and tab ids — so you treat each helper command as trustworthy and act on what it reports.
+You drive subagents through a helper CLI that wraps herdr. The helper handles the fragile parts — verifying the spawn landed, confirming the prompt was delivered, tracking pane and tab ids — so you treat each helper command as trustworthy and act on what it reports. It is invoked by absolute path, resolved per artifact root at build time; the shared source carries the path as a token and the build substitutes it.
 
 All children are herdr tabs in your workspace. One tab, one task.
 
@@ -33,21 +33,21 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 ## Spawn
 
 ```
-helper spawn --kind <pi|claude> --agent <name> --label "<title>"
+{{helper}} spawn --kind <pi|claude> --agent <name> --label "<title>"
 ```
 
 - `--kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
 - `--agent <name>` is a name defined in `.claude/agents/*.md`, never a path.
 - The label is final; a child never renames its own tab.
 
-`helper spawn` returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the helper closes the half-created tab and reports; surface that to the human rather than retrying blindly.
+`{{helper}} spawn` returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the helper closes the half-created tab and reports; surface that to the human rather than retrying blindly.
 
 ## Prompt
 
 Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it.
 
 ```
-helper prompt <pane_id> --body "<supervisor-agent>… your task …</supervisor-agent>"
+{{helper}} prompt <pane_id> --body "<supervisor-agent>… your task …</supervisor-agent>"
 ```
 
 {{wake}}
@@ -57,14 +57,14 @@ helper prompt <pane_id> --body "<supervisor-agent>… your task …</supervisor-
 When a child finishes, you are woken to collect it.
 
 ```
-helper collect <pane_id>
+{{helper}} collect <pane_id>
 ```
 
 Returns `{pane_id, label, agent, status, message?, error?}`. `status` reflects herdr's state, **not** task success — a child that gives up still reaches `done`. Read `message` and judge the result yourself.
 
 Discriminate on the tag in the child's final message:
 
-- Wrapped in `<subagent-ask>…</subagent-ask>` — the child is asking a question. Reply with `helper prompt` (wrapped in `<supervisor-agent>`), and do **not** close the tab.
+- Wrapped in `<subagent-ask>…</subagent-ask>` — the child is asking a question. Reply with `{{helper}} prompt` (wrapped in `<supervisor-agent>`), and do **not** close the tab.
 - Otherwise — this is the child's result. You are done with it; close the tab.
 
 `blocked` is non-terminal: a blocked child is still working or waiting, so leave it alone.
@@ -72,24 +72,20 @@ Discriminate on the tag in the child's final message:
 ## Close
 
 ```
-helper close <tab_id>
+{{helper}} close <tab_id>
 ```
 
 Close a child once you have its result and no longer need it. Closing before spawning the next batch keeps the fleet clean.
 
 ## The fleet
 
-```
-helper list
-```
-
-Surfaces every tracked child and its status every turn. A wake can be missed; `list` is the durable backstop, so a missed wake is never fatal.
+Run `{{helper}} list` to see every tracked child and its status. A wake can be missed; `list` is the durable backstop you run on demand, so a missed wake is never fatal. Run it whenever you are unsure what is outstanding.
 
 A child that stalls has no automatic timeout. Surface it to the human as a fleet item — do not kill it.
 
 ## Inspection (discouraged)
 
-The helper is your complete interface. If it reports something you cannot act on, surface the pane to the human rather than reaching past the helper. `herdr --help` lists herdr's raw commands for a genuine emergency; prefer handing the pane to the human over running herdr yourself.
+The helper is your complete interface. If it reports something you cannot act on, surface the pane to the human rather than reaching past it. `herdr --help` lists herdr's raw commands for a genuine emergency; prefer handing the pane to the human over running herdr yourself.
 
 ## Nesting
 
