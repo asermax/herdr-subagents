@@ -32,6 +32,9 @@ export function filePlan(harness: Harness): EmitFile[] {
   return [
     { dest: "skills/delegate.md", type: "substitute", src: PROTOCOL },
     { dest: "skills/onboarding.md", type: "copy", src: ONBOARDING },
+    // The extension ships as source .ts that pi loads via its tsx loader
+    // (matches @asermax/pi-cc-plugins' shape). Token-free, so copied verbatim.
+    { dest: "extension/index.ts", type: "copy", src: "extension/index.ts" },
     { dest: manifestPath(harness), type: "generate", render: manifestFor(harness) },
   ];
 }
@@ -54,9 +57,14 @@ function piManifest() {
     description: "Delegate coding-agent work by spawning other agents as herdr tabs.",
     type: "module",
     license: "MIT",
-    files: ["skills/"],
+    // Extension source is shipped so pi's tsx loader can load it from source.
+    files: ["skills/", "extension/"],
     pi: {
+      extensions: ["./extension/index.ts"],
       skills: ["./skills"],
+    },
+    peerDependencies: {
+      "@earendil-works/pi-coding-agent": "*",
     },
   };
 }
