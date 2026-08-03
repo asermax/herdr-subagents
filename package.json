@@ -1,0 +1,19 @@
+{
+  "name": "herdr-subagents-build",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build toolchain for the herdr-subagents repo: turns pure-source Markdown with substitution tokens into the pi package and Claude plugin artifacts.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "node --experimental-strip-types build/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.5"
+  }
+}
