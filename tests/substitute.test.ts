@@ -3,6 +3,7 @@ import {
   substitute,
   UnknownTokenError,
   MissingTokenValueError,
+  TokenNotConvergedError,
 } from "../build/substitute.ts";
 
 describe("substitute", () => {
@@ -58,5 +59,21 @@ describe("substitute", () => {
       helper: "/bin/h",
     });
     expect(out).toBe("/bin/h and /bin/h");
+  });
+
+  it("re-substitutes a token that appears inside another token's value", () => {
+    // The wake fragment ({{wake}}'s value) references {{helper}}; one pass
+    // would leave {{helper}} literal. The fixpoint resolves both.
+    const out = substitute("arm {{wake}}", {
+      wake: "it spawns {{helper}} watch",
+      helper: "/bin/herdr-helper",
+    });
+    expect(out).toBe("arm it spawns /bin/herdr-helper watch");
+  });
+
+  it("errors when a token value references its own token (no fixpoint)", () => {
+    expect(() =>
+      substitute("{{wake}}", { wake: "loop {{wake}}" }),
+    ).toThrow(TokenNotConvergedError);
   });
 });

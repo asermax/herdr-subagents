@@ -34,14 +34,10 @@ export function helperPath(artifactRoot: string): string {
  *  - source -> map: every `{{...}}` in source, including unknown spellings,
  *    must have an entry, or the build fails. The strong drift guard.
  *  - map -> source: every declared value must be consumed somewhere.
- *
- * `{{wake}}` is consumed by the shared protocol today. `{{helper}}` enters this
- * map together with the skill prose that first references it (#18's lane);
- * adding one without the other is a build error by construction.
  */
 export function tokenMapFor(harness: Harness, artifactRoot: string): TokenMap {
-  void artifactRoot;
-  return { wake: readWakeFragment(harness) };
-  // When {{helper}} enters skill source, also declare it here:
-  //   return { wake: readWakeFragment(harness), helper: helperPath(artifactRoot) };
+  return {
+    wake: readWakeFragment(harness),
+    helper: helperPath(artifactRoot),
+  };
 }
