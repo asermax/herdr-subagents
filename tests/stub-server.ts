@@ -47,6 +47,9 @@ export class StubHerdrServer {
   private sockets = new Set<Socket>();
   private tmpDir: string;
   private waitAttempts: Record<string, number> = {};
+  // Per-connection state: which panes it subscribed to, and which queued
+  // changes it has already received (so a re-subscribe does not replay).
+  private connState = new Map<Socket, { watched: Set<string>; delivered: Set<number> }>();
 
   constructor(opts: StubServerOptions = {}) {
     this.tmpDir = mkdtempSync(join(tmpdir(), "herdr-stub-"));
@@ -58,10 +61,31 @@ export class StubHerdrServer {
     this.events = events;
   }
 
-  // Queue changes to push to the next `events.subscribe` for the matching
-  // pane. Each subscriber gets every change whose pane it subscribed to.
+  // Append changes to the stream queue. Each subscriber gets every change
+  // whose pane it subscribed to, exactly once (delivery is tracked per
+  // connection so a re-subscribe for a new pane does not replay old ones).
   stream(changes: StreamedChange[]): void {
-    this.streamQueue = [...changes];
+    for (const c of changes) this.streamQueue.push(c);
+    // Re-evaluate delivery for every live connection (a stream() call after a
+    // re-subscribe must reach the new pane).
+    for (const socket of this.sockets) this.deliverQueued(socket);
+  }
+
+  // Broadcast a pane.created event to every connection subscribed to it. A
+  // pane.created subscription is workspace-wide (no pane_id), so any
+  // connection that subscribed to the type receives it.
+  pushPaneCreated(paneId: string): void {
+    for (const socket of this.sockets) {
+      const state = this.connState.get(socket);
+      if (!state || !state.watched.has("pane.created")) continue;
+      if (!this.sockets.has(socket)) continue;
+      socket.write(
+        JSON.stringify({
+          event: "pane.created",
+          data: { pane_id: paneId },
+        }) + "\n",
+      );
+    }
   }
 
   start(): Promise<void> {
@@ -82,6 +106,7 @@ export class StubHerdrServer {
 
   private handle(socket: Socket): void {
     this.sockets.add(socket);
+    this.connState.set(socket, { watched: new Set(), delivered: new Set() });
     let buffer = "";
     socket.on("data", (chunk) => {
       buffer += chunk.toString();
@@ -92,27 +117,46 @@ export class StubHerdrServer {
         if (line.trim()) this.respond(line, socket);
       }
     });
-    socket.on("close", () => this.sockets.delete(socket));
-    socket.on("error", () => this.sockets.delete(socket));
+    socket.on("close", () => {
+      this.sockets.delete(socket);
+      this.connState.delete(socket);
+    });
+    socket.on("error", () => {
+      this.sockets.delete(socket);
+      this.connState.delete(socket);
+    });
   }
 
   private handleSubscribe(
     req: {
       id: string | number;
-      params: { subscriptions?: Array<{ type: string; pane_id: string }> };
+      params: { subscriptions?: Array<{ type: string; pane_id?: string }> };
     },
     socket: Socket,
   ): void {
     const subs = req.params.subscriptions ?? [];
-    const watched = new Set(subs.map((s) => s.pane_id));
-    const reply = (envelope: object) => {
-      socket.write(JSON.stringify(envelope) + "\n");
+    const state = this.connState.get(socket) ?? {
+      watched: new Set<string>(),
+      delivered: new Set<number>(),
     };
-    // Ack the subscription, then push every queued change for a watched pane.
-    // A new subscriber gets the full queue (the registry is fixed for a test).
-    reply({ id: req.id, result: { type: "subscription_started" } });
-    for (const change of this.streamQueue) {
-      if (!watched.has(change.paneId)) continue;
+    // pane.created subscriptions carry no pane_id; we key them on the type so
+    // pushPaneCreated can find subscribers. pane-scoped subscriptions key on
+    // the pane_id.
+    for (const s of subs) state.watched.add(s.pane_id ?? s.type);
+    this.connState.set(socket, state);
+    socket.write(JSON.stringify({ id: req.id, result: { type: "subscription_started" } }) + "\n");
+    this.deliverQueued(socket);
+  }
+
+  // Push every queued change whose pane this connection now watches, marking
+  // each delivered so a later re-subscribe does not replay it.
+  private deliverQueued(socket: Socket): void {
+    const state = this.connState.get(socket);
+    if (!state) return;
+    this.streamQueue.forEach((change, idx) => {
+      if (state.delivered.has(idx)) return;
+      if (!state.watched.has(change.paneId)) return;
+      state.delivered.add(idx);
       const push = () => {
         if (!this.sockets.has(socket)) return;
         socket.write(
@@ -124,7 +168,7 @@ export class StubHerdrServer {
       };
       if (change.delayMs) setTimeout(push, change.delayMs);
       else push();
-    }
+    });
   }
 
   private respond(raw: string, socket: Socket): void {

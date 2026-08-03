@@ -214,3 +214,60 @@ describe("helper watch", () => {
     expect(lines).toEqual([]);
   });
 });
+
+describe("helper watch mid-session children", () => {
+  it("re-subscribes to children registered after watch starts on pane.created", async () => {
+    // Start with one child tracked.
+    seedRegistry([
+      {
+        pane_id: "w1Z:p1",
+        tab_id: "w1Z:t1",
+        workspace_id: "w1Z",
+        label: "first",
+        agent: "doer",
+        kind: "pi",
+        agent_name: "doer",
+        status: "idle",
+      },
+    ]);
+
+    // p1 streams immediately; p2 is NOT subscribed at startup. After a
+    // pane.created event, watch re-reads the registry, finds p2 now tracked,
+    // and subscribes to it — then p2's change streams.
+    server.stream([{ paneId: "w1Z:p1", status: "done" }] as StreamedChange[]);
+    // Add p2 to the registry, then push a pane.created event so watch re-reads.
+    setTimeout(() => {
+      seedRegistry([
+        {
+          pane_id: "w1Z:p1",
+          tab_id: "w1Z:t1",
+          workspace_id: "w1Z",
+          label: "first",
+          agent: "doer",
+          kind: "pi",
+          agent_name: "doer",
+          status: "idle",
+        },
+        {
+          pane_id: "w1Z:p2",
+          tab_id: "w1Z:t2",
+          workspace_id: "w1Z",
+          label: "second",
+          agent: "doer",
+          kind: "pi",
+          agent_name: "doer",
+          status: "idle",
+        },
+      ]);
+      server.pushPaneCreated("w1Z:p2");
+      // Now a status change for the newly-subscribed p2 must stream.
+      server.stream([{ paneId: "w1Z:p2", status: "done" }] as StreamedChange[]);
+    }, 150);
+
+    const { lines } = await runWatch({ collectLines: 2, timeoutMs: 2500 });
+
+    const emitted = lines.map((l) => JSON.parse(l).pane_id);
+    expect(emitted).toContain("w1Z:p1");
+    expect(emitted).toContain("w1Z:p2");
+  });
+});

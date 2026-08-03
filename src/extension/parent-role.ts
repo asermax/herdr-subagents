@@ -34,8 +34,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 export function helperPath(): string {
   const override = process.env.HERDR_HELPER;
   if (override) return override;
-  // extension/<file> → package root → herdr-helper
-  return join(dirname(dirname(here)), "herdr-helper");
+  // extension/<file> → package root → herdr-helper. The dev loop overrides
+  // with HERDR_HELPER (the helper is not at src/herdr-helper in source).
+  return join(dirname(here), "herdr-helper");
 }
 
 export interface StatusCard {
