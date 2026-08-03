@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createRegistrar, type Registrar, type RegisterPayload } from "./registrar.js";
+import { registerParentRole } from "./parent-role.js";
 
 // herdr-subagents pi extension. This slice owns the agent-resolution role
 // (spec §7/§8): the `--agent` flag, the registrar that resolves
@@ -148,4 +149,9 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
     herdrProviderReady: () => consumerPresent,
   };
   currentHandle = handle;
+
+  // Parent-side role (#22): spawn `helper watch`, forward changes into
+  // TUI-only status cards, and wake on terminal-only states. Pushes its
+  // teardown into the drain list so session_shutdown stops the watcher.
+  unsubs.push(registerParentRole(pi));
 }

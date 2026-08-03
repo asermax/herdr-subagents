@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { buildSync } from "esbuild";
 import type { Harness } from "./harness.ts";
 import { tokenMapFor } from "./harness.ts";
 import { filePlan, coverageSources } from "./plan.ts";
@@ -24,6 +25,15 @@ export function emitArtifact(harness: Harness, artifactRoot: string): void {
     const dest = join(artifactRoot, file.dest);
     mkdirSync(join(dest, ".."), { recursive: true });
 
+    if (file.type === "bundle") {
+      // Bundle the entry into a single self-contained ESM file with a node
+      // shebang, then mark it executable so it can be spawned by path.
+      const bundled = bundleHelper(join(srcDir, file.src));
+      writeFileSync(dest, bundled);
+      chmodSync(dest, 0o755);
+      continue;
+    }
+
     let content: string;
     if (file.type === "substitute") {
       content = substitute(readFileSync(join(srcDir, file.src), "utf8"), map);
@@ -35,4 +45,22 @@ export function emitArtifact(harness: Harness, artifactRoot: string): void {
 
     writeFileSync(dest, content);
   }
+}
+
+// Bundle the helper into one ESM file with a node shebang. esbuild inlines the
+// helper's siblings (collect, registry, herdr-client, …) so the result is a
+// single spawnable binary with no further resolution at runtime.
+function bundleHelper(entry: string): string {
+  const out = buildSync({
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    write: false,
+  });
+  const code = out.outputFiles[0]?.text ?? "";
+  // esbuild preserves a shebang from the source entry; drop it so we add
+  // exactly one.
+  const stripped = code.startsWith("#!") ? code.slice(code.indexOf("\n") + 1) : code;
+  return "#!/usr/bin/env node\n" + stripped;
 }

@@ -7,6 +7,7 @@ import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
 import { fileRegistryStore, Registry } from "./registry.js";
 import { spawnChild, type SpawnResult } from "./spawn.js";
+import { runWatch } from "./watch.js";
 
 const KINDS = ["pi", "claude"] as const;
 type Kind = (typeof KINDS)[number];
@@ -65,10 +66,12 @@ async function main(): Promise<void> {
       return runList();
     case "close":
       return runClose(flags);
+    case "watch":
+      return runWatch();
     default:
       fail(
         `unknown subcommand ${subcommand ?? "(none)"}\n` +
-          "usage: helper <spawn|prompt|wait|collect|list|close> [options]",
+          "usage: helper <spawn|prompt|wait|collect|list|close|watch> [options]",
         2,
       );
   }

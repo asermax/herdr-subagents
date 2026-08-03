@@ -17,7 +17,11 @@ import type { TokenMap } from "./tokens.ts";
 export type EmitFile =
   | { dest: string; type: "substitute"; src: string }
   | { dest: string; type: "copy"; src: string }
-  | { dest: string; type: "generate"; render: (map: TokenMap) => string };
+  | { dest: string; type: "generate"; render: (map: TokenMap) => string }
+  // Bundle a TypeScript entry into a single self-contained ESM file with a
+  // node shebang, marked executable. Used to ship the helper binary into an
+  // artifact so it can be spawned by absolute path (spec §3).
+  | { dest: string; type: "bundle"; src: string };
 
 /** Relative path of the shared parent-facing protocol body in source. */
 const PROTOCOL = "shared/protocol.md";
@@ -50,6 +54,11 @@ export function filePlan(harness: Harness): EmitFile[] {
       // The extension ships as source .ts that pi loads via its tsx loader
       // (matches @asermax/pi-cc-plugins' shape). Token-free, copied verbatim.
       { dest: "extension/index.ts", type: "copy", src: "extension/index.ts" },
+      { dest: "extension/parent-role.ts", type: "copy", src: "extension/parent-role.ts" },
+      // The helper binary, bundled to a single executable at the package root
+      // so the extension (and the {{helper}} token) can spawn it by absolute
+      // path (spec §3). herdr-helper resolves relative to the package root.
+      { dest: "herdr-helper", type: "bundle", src: "helper/cli.ts" },
       { dest: "package.json", type: "generate", render: () => piManifest() },
     ];
   }
@@ -97,8 +106,13 @@ function piManifest(): string {
         description: "Delegate coding-agent work by spawning other agents as herdr tabs.",
         type: "module",
         license: "MIT",
-        // Extension source is shipped so pi's tsx loader can load it from source.
-        files: ["skills/", "extension/"],
+        // The helper binary, invokable by absolute path from the extension and
+        // the {{helper}} skill token (spec §3).
+        bin: {
+          "herdr-helper": "./herdr-helper",
+        },
+        // Extension source + the helper binary ship in the tarball.
+        files: ["skills/", "extension/", "herdr-helper"],
         pi: {
           extensions: ["./extension/index.ts"],
           skills: ["./skills"],
