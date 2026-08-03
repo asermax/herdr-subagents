@@ -50,6 +50,7 @@ export function filePlan(harness: Harness): EmitFile[] {
       // The extension ships as source .ts that pi loads via its tsx loader
       // (matches @asermax/pi-cc-plugins' shape). Token-free, copied verbatim.
       { dest: "extension/index.ts", type: "copy", src: "extension/index.ts" },
+      { dest: "extension/parent-role.ts", type: "copy", src: "extension/parent-role.ts" },
       { dest: "package.json", type: "generate", render: () => piManifest() },
     ];
   }

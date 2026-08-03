@@ -24,6 +24,13 @@ export interface ScriptedEvent {
   deliverOnAttempt?: number;
 }
 
+export interface StreamedChange {
+  paneId: string;
+  status: string;
+  // Delay before the change is pushed, in ms.
+  delayMs?: number;
+}
+
 export interface StubServerOptions {
   // Events the server will surface, in order. A `events.wait` matches when an
   // event for the pane with a requested status (and seq > fromSeq) is due.
@@ -36,6 +43,7 @@ export class StubHerdrServer {
   readonly socketPath: string;
   private server: Server | null = null;
   private events: ScriptedEvent[] = [];
+  private streamQueue: StreamedChange[] = [];
   private sockets = new Set<Socket>();
   private tmpDir: string;
   private waitAttempts: Record<string, number> = {};
@@ -48,6 +56,12 @@ export class StubHerdrServer {
 
   script(events: ScriptedEvent[]): void {
     this.events = events;
+  }
+
+  // Queue changes to push to the next `events.subscribe` for the matching
+  // pane. Each subscriber gets every change whose pane it subscribed to.
+  stream(changes: StreamedChange[]): void {
+    this.streamQueue = [...changes];
   }
 
   start(): Promise<void> {
@@ -82,6 +96,37 @@ export class StubHerdrServer {
     socket.on("error", () => this.sockets.delete(socket));
   }
 
+  private handleSubscribe(
+    req: {
+      id: string | number;
+      params: { subscriptions?: Array<{ type: string; pane_id: string }> };
+    },
+    socket: Socket,
+  ): void {
+    const subs = req.params.subscriptions ?? [];
+    const watched = new Set(subs.map((s) => s.pane_id));
+    const reply = (envelope: object) => {
+      socket.write(JSON.stringify(envelope) + "\n");
+    };
+    // Ack the subscription, then push every queued change for a watched pane.
+    // A new subscriber gets the full queue (the registry is fixed for a test).
+    reply({ id: req.id, result: { type: "subscription_started" } });
+    for (const change of this.streamQueue) {
+      if (!watched.has(change.paneId)) continue;
+      const push = () => {
+        if (!this.sockets.has(socket)) return;
+        socket.write(
+          JSON.stringify({
+            event: "pane.agent_status_changed",
+            data: { pane_id: change.paneId, agent_status: change.status },
+          }) + "\n",
+        );
+      };
+      if (change.delayMs) setTimeout(push, change.delayMs);
+      else push();
+    }
+  }
+
   private respond(raw: string, socket: Socket): void {
     let req: {
       id: string | number;
@@ -91,6 +136,7 @@ export class StubHerdrServer {
           pane_id?: string;
           agent_status?: string[];
         };
+        subscriptions?: Array<{ type: string; pane_id: string }>;
         from_seq?: number;
         timeout_ms?: number;
       };
@@ -98,6 +144,10 @@ export class StubHerdrServer {
     try {
       req = JSON.parse(raw);
     } catch {
+      return;
+    }
+    if (req.method === "events.subscribe") {
+      this.handleSubscribe(req, socket);
       return;
     }
     if (req.method !== "events.wait") return;

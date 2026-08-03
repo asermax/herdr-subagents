@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerParentRole } from "./parent-role.js";
 
 // Child-side role of the herdr-subagents pi extension. Owns onboarding
 // injection only (spec §6); stands up the factory #21/#22 extend. No herdr
@@ -58,4 +59,9 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
       }
     }
   });
+
+  // Parent-side role (#22): spawn `helper watch`, forward changes into
+  // TUI-only status cards, and wake on terminal-only states. Pushes its
+  // teardown into the drain list so session_shutdown stops the watcher.
+  unsubs.push(registerParentRole(pi));
 }

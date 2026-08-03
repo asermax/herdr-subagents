@@ -111,7 +111,6 @@ describe("CLI help surface", () => {
     expect(stderr).toMatch(/collect/);
     expect(stderr).toMatch(/list/);
     expect(stderr).toMatch(/close/);
-    // watch is NOT in this ticket.
-    expect(stderr).not.toMatch(/watch/);
+    expect(stderr).toMatch(/watch/);
   });
 });

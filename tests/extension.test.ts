@@ -26,6 +26,9 @@ interface FakePi {
     on: ReturnType<typeof vi.fn>;
     emit: ReturnType<typeof vi.fn>;
   };
+  registerEntryRenderer: ReturnType<typeof vi.fn>;
+  appendEntry: ReturnType<typeof vi.fn>;
+  sendMessage: ReturnType<typeof vi.fn>;
   handlers: Map<string, CapturedHandler>;
   busHandlers: Map<string, (data: unknown) => void>;
 }
@@ -49,6 +52,12 @@ function createFakePi(): FakePi {
       }),
       emit: vi.fn(),
     },
+    // The parent-side role (#22) calls these at registration time. They are
+    // pipe-fitting (spec Testing §"Not covered") and are NOT asserted here —
+    // the fake pi only needs to provide them so the factory composes.
+    registerEntryRenderer: vi.fn(),
+    appendEntry: vi.fn(),
+    sendMessage: vi.fn(),
     handlers,
     busHandlers,
   };
