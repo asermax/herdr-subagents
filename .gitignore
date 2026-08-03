@@ -1,1 +1,7 @@
 .pi/agents/
+
+# Node toolchain
+node_modules/
+
+# Build output — two complete, derived artifacts (spec §9). Never hand-edit.
+build/out/
