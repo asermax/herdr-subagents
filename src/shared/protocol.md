@@ -14,7 +14,7 @@ A child that needs a decision ends its turn with the question wrapped in `<subag
 
 The delegate skill is invoked as `/skill:delegate` on pi and `/delegate` on claude. A child invokes it on its own harness. If you direct a cross-harness child to delegate, name the form for its harness in your prompt.
 
-When a message carries an invocation, the slash command comes **first, outside the `<supervisor-agent>` tag** — it is a harness command, not part of the tagged payload. The tagged block follows it.
+When a message carries a skill invocation (any `/skill:...` or `/...` command), it comes **first, outside the `<supervisor-agent>` tag** — it is a harness command, not part of the tagged payload. The tagged block follows it. This holds for every skill, not only delegation: a parent directing a child to run `/skill:implement`, `/skill:tdd`, or any other skill puts the command on its own line before the opening tag.
 
 ---
 
