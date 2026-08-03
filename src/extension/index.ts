@@ -75,13 +75,20 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   // signal AND listens for the other's; whichever loads second triggers the
   // first's listener. The flag is correct by session start.
   //
-  // Signals: the PROVIDER (this extension) owns `provider-ready`; the CONSUMER
-  // (`pi-cc-plugins`) owns `provider-ready-request`. Each side listens for the
-  // other's signal and re-emits its own once on seeing it, so a side that
-  // loaded first is not missed by one that loaded second. The re-emit is
-  // guarded so the two sides cannot ping-pong. The provider never emits the
-  // request and has no ready-listener, which keeps it deaf to its own echo
-  // (pi's bus delivers a self-emit to the emitter's own listeners).
+  // SELF-EMIT TRAP — why the provider emits ONLY its own signal. pi's EventBus
+  // is a Node EventEmitter (dist/core/event-bus.js), so a self-emit is delivered
+  // to the emitter's own listeners. If the provider emitted the consumer's
+  // signal (`provider-ready-request`), its own request listener would fire at
+  // once and falsely mark the consumer present. So each side emits only the
+  // signal it OWNS and listens only for the one it does not:
+  //   - PROVIDER (this extension): emits `provider-ready`; listens for
+  //     `provider-ready-request`. On a request it sets its presence flag and
+  //     re-emits `provider-ready` once.
+  //   - CONSUMER (`pi-cc-plugins`, ticket #23): emits `provider-ready-request`;
+  //     listens for `provider-ready`. On seeing ready it sets its own flag and
+  //     re-emits its request once — this symmetric re-emit is REQUIRED, or a
+  //     provider that loaded first never learns the consumer exists.
+  // The one-shot re-emit is guarded so the two sides cannot ping-pong.
   let consumerPresent = false;
 
   // Register listeners BEFORE emitting: a consumer's synchronous re-emit (on
