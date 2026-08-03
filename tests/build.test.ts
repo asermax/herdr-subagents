@@ -28,6 +28,12 @@ describe("build, both tokens", () => {
       pi: "wakes you automatically",
       claude: "arm the wake",
     };
+    // The delegate body lives at the path each harness discovers: pi reads the
+    // package `skills/` dir (flat file); claude auto-discovers `skills/<name>/SKILL.md`.
+    const delegatePath: Record<"pi" | "claude", string> = {
+      pi: "skills/delegate.md",
+      claude: "skills/delegate/SKILL.md",
+    };
 
     for (const harness of ["pi", "claude"] as const) {
       const root = mkdtempSync(join(tmpdir(), "herdr-build-"));
@@ -36,7 +42,7 @@ describe("build, both tokens", () => {
         // throws before any file is written.
         expect(() => emitArtifact(harness, root)).not.toThrow();
 
-        const bodyPath = join(root, "skills/delegate.md");
+        const bodyPath = join(root, delegatePath[harness]);
         expect(existsSync(bodyPath)).toBe(true);
         const body = readFileSync(bodyPath, "utf8");
 
