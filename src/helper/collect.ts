@@ -215,8 +215,12 @@ function defaultReadText(path: string): string {
 
 function defaultResolveClaudeSession(uuid: string): string | undefined {
   // claude stores transcripts under ~/.claude/projects/<project>/<uuid>.jsonl.
-  // The project directory is encoded from the cwd; the helper does not know the
-  // child's cwd reliably, so it scans the projects tree for the uuid.
+  // herdr records a claude child's session as { kind: "id", value: "<uuid>" }
+  // with NO path (unlike pi's { kind: "path", value: ".../x.jsonl" }), and the
+  // child's own Stop hook — the path that would carry the transcript — was
+  // deliberately deleted (ADR-0002 makes collection parent-side). So the helper
+  // does not know the child's cwd and must scan the projects tree for the uuid.
+  // A herdr-side `agent_session_path` for claude would remove this scan.
   const projectsRoot = join(homedir(), ".claude", "projects");
   if (!existsSync(projectsRoot)) return undefined;
   for (const dir of readdirSync(projectsRoot)) {
