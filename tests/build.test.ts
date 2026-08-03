@@ -1,17 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emitArtifact } from "../build/emit.ts";
-import { tokenMapFor } from "../build/harness.ts";
+import { tokenMapFor, HELPER_BIN } from "../build/harness.ts";
 import { coverageSources } from "../build/plan.ts";
 import { assertCoverage } from "../build/coverage.ts";
-import { substitute, TokenNotConvergedError } from "../build/substitute.ts";
 
 /**
  * Not a build-output diff test (forbidden by spec Testing "Not tested"). This
  * asserts the token contract holds end to end: both tokens are declared and
- * consumed (coverage), and the convergence guard catches the one real defect.
+ * consumed (coverage), and emit succeeds with every placeholder resolved.
  */
 describe("build, both tokens", () => {
   it("declares and consumes both {{wake}} and {{helper}} for each harness", () => {
@@ -24,30 +23,34 @@ describe("build, both tokens", () => {
     }
   });
 
-  it("refuses to emit while a wake fragment embeds {{wake}} as prose (guard)", () => {
-    // The drafted wake fragments still carry a `<!-- Injects into {{wake}} -->`
-    // metadata line as prose. That makes {{wake}}'s value self-referential, so
-    // substitution never converges and emit must refuse rather than ship a
-    // broken artifact. Tracked on #18; flipping this assertion is the signal.
+  it("emits both artifacts with the wake fragment injected and {{helper}} resolved", () => {
+    const wakeMarker: Record<"pi" | "claude", string> = {
+      pi: "wakes you automatically",
+      claude: "arm the wake",
+    };
+
     for (const harness of ["pi", "claude"] as const) {
       const root = mkdtempSync(join(tmpdir(), "herdr-build-"));
       try {
-        expect(() => emitArtifact(harness, root)).toThrow(TokenNotConvergedError);
+        // The both-directions coverage assertion runs inside emit; a mismatch
+        // throws before any file is written.
+        expect(() => emitArtifact(harness, root)).not.toThrow();
+
+        const bodyPath = join(root, "skills/delegate.md");
+        expect(existsSync(bodyPath)).toBe(true);
+        const body = readFileSync(bodyPath, "utf8");
+
+        // The wake fragment was injected at {{wake}}.
+        expect(body).toContain(wakeMarker[harness]);
+        // {{helper}} resolved to the absolute per-artifact-root path, including
+        // inside the injected wake fragment (fixpoint substitution).
+        expect(body).toContain(`${root}/${HELPER_BIN}`);
+        // No placeholder survives anywhere in the emitted artifact.
+        expect(body).not.toMatch(/\{\{wake\}\}/);
+        expect(body).not.toMatch(/\{\{helper\}\}/);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     }
-  });
-
-  it("resolves every placeholder once source is clean (post-#18 path)", () => {
-    // The wake fragment references {{helper}}; the fixpoint resolves both tokens
-    // in one substitute call. This is the path emitArtifact takes once #18
-    // drops the stray {{wake}} metadata line from the fragment files.
-    const out = substitute("arm {{wake}}", {
-      wake: "it spawns {{helper}} watch",
-      helper: "/bin/herdr-helper",
-    });
-    expect(out).not.toMatch(/\{\{wake\}\}/);
-    expect(out).not.toMatch(/\{\{helper\}\}/);
   });
 });
