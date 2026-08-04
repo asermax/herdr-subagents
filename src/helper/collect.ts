@@ -240,12 +240,23 @@ function defaultResolveClaudeSession(uuid: string): string | undefined {
 
 // `wait`: blocks until the child reaches a terminal state (done|gone). `blocked`
 // is non-terminal and benign — wait does NOT return on it. Speaks the socket.
+//
+// herdr's `done` persists until acknowledged (focus or the next prompt), so a
+// child that is *already* `done` from a previous turn would resolve the wait
+// instantly on a stale `done`. To distinguish "already done" from "just
+// finished," capture the pre-wait `state_change_seq` and pass it as `fromSeq`:
+// the lingering `done` (seq at or below the captured value) is filtered
+// client-side, and only a genuinely new transition resolves. Mirrors
+// sendPromptWithDelivery in spawn.ts.
 export async function waitChild(
   paneId: string,
   client: HerdrClient,
   timeoutMs = 0,
 ): Promise<AgentSnapshot> {
+  const before = await client.agentGet(paneId);
+  const fromSeq = before?.state_change_seq ?? 0;
   return client.waitForStatus(paneId, ["done", "unknown"], {
     timeoutMs: timeoutMs || 3_600_000,
+    fromSeq,
   });
 }

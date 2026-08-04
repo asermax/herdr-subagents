@@ -84,6 +84,60 @@ describe("wait", () => {
       await server.close();
     }
   });
+
+  // herdr's `done` persists until acknowledged, so a child already `done` from
+  // a prior turn must not resolve a fresh wait on that stale `done`. waitChild
+  // captures the pre-wait state_change_seq and passes it as fromSeq; the
+  // client-side filter skips the stale replay and resolves only on a new turn.
+  it("does not return instantly on a pre-existing done with an old seq", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      // The child is ALREADY done at seq 5 (a lingering, unacknowledged done).
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "done", state_change_seq: 5 },
+      };
+      // Stream a stale replay of that same seq-5 done, then a genuinely new
+      // done at seq 6 from the next turn.
+      server.script([
+        { paneId: "w1Z:p1", status: "done", seq: 5 } as ScriptedEvent,
+        { paneId: "w1Z:p1", status: "done", seq: 6 } as ScriptedEvent,
+      ]);
+      const snap = await waitChild("w1Z:p1", client, 2000);
+      // Resolved on the NEW done, not the stale seq-5 replay.
+      expect(snap.state_change_seq).toBe(6);
+      // waitChild passed the captured pre-wait seq as fromSeq so the stale
+      // done was filtered client-side.
+      const wait = client.calls.find((c: Call) => c.method === "events.wait")!;
+      expect(wait.args.fromSeq).toBe(5);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("times out when only a stale done is available, rather than returning it", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      // Already done at seq 5.
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "done", state_change_seq: 5 },
+      };
+      // Only the stale seq-5 done is streamed — no new turn ever arrives.
+      server.script([
+        { paneId: "w1Z:p1", status: "done", seq: 5 } as ScriptedEvent,
+      ]);
+      // A short timeout: waitChild must skip the stale done and time out,
+      // NOT return it instantly.
+      await expect(waitChild("w1Z:p1", client, 300)).rejects.toMatchObject({
+        code: "wait_timeout",
+      });
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 // waitForStatusOverSocket filters stale events client-side: herdr does not
