@@ -16,14 +16,23 @@ function isKind(v: string): v is Kind {
   return (KINDS as readonly string[]).includes(v);
 }
 
-function parseArgs(argv: string[]): Record<string, string> {
+export function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === undefined || !a.startsWith("--")) continue;
+    // A bare `--` is the conventional separator, not a flag. Skip it without
+    // treating the following token as its value.
+    if (a === "--") continue;
     const key = a.slice(2);
     const next = argv[i + 1];
-    if (next !== undefined && !next.startsWith("--")) {
+    // Value-bearing flags consume the next token unconditionally — even when
+    // it starts with `--` (e.g. --label "--refactor"). Without this, a
+    // `--`-prefixed value is silently dropped and the flag reads as `true`.
+    if (VALUE_FLAGS.has(key) && next !== undefined) {
+      out[key] = next;
+      i++;
+    } else if (next !== undefined && !next.startsWith("--")) {
       out[key] = next;
       i++;
     } else {
@@ -32,6 +41,11 @@ function parseArgs(argv: string[]): Record<string, string> {
   }
   return out;
 }
+
+// Flags that take a value (vs. bare boolean flags). A value-bearing flag
+// consumes the next token as its value regardless of a leading `--`, so a
+// label or body like "--refactor" is preserved instead of eaten.
+const VALUE_FLAGS = new Set(["kind", "agent", "label", "body", "cwd", "workspace", "timeout"]);
 
 // Flags `spawn` claims for itself. Anything else on the parent's argv forwards
 // to the child's harness (spec §9: a parent under development passes the same
@@ -213,7 +227,11 @@ function restPositional(_flags: Record<string, string>, argv: string[]): string 
   return rest[1];
 }
 
-main().catch((e) => {
-  if (e instanceof HerdrError) fail(e.message);
-  fail(e instanceof Error ? e.message : String(e));
-});
+// Run only when invoked as the entrypoint — importing the module (for unit
+// tests of parseArgs) must not trigger the CLI.
+if (import.meta.main) {
+  main().catch((e) => {
+    if (e instanceof HerdrError) fail(e.message);
+    fail(e instanceof Error ? e.message : String(e));
+  });
+}

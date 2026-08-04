@@ -13,9 +13,11 @@ import {
 // The real herdr client. CLI calls go through `herdr`; the event surface uses
 // the newline-delimited JSON-RPC socket from HERDR_SOCKET_PATH.
 //
-// A tiny per-socket id counter keeps request/response correlated. Subscriptions
-// are not needed — we use the one-shot `events.wait`, so each wait opens its
-// own connection.
+// `waitForStatusOverSocket` streams `pane.agent_status_changed` over
+// `events.subscribe` and filters stale events client-side: herdr does NOT
+// implement `from_seq` filtering on `events.wait` (only the test stub used
+// to), so seq filtering must happen here. Streaming lets the wait drain past
+// stale replays and resolve on the first genuinely new match.
 
 const HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
 
@@ -169,10 +171,18 @@ export class RealHerdrClient implements HerdrClient {
   }
 }
 
-// One-shot socket wait. Opens a connection, sends an `events.wait` request
-// matching on `pane_agent_status_changed` for the target statuses, and resolves
-// with the snapshot from the event. Re-implemented as a free function so the
-// test harness can drive the same framing if needed.
+// Stream-based socket wait. Opens a connection, subscribes to
+// `pane.agent_status_changed` for the pane, and resolves with the snapshot
+// from the first event whose status is in the target set AND whose
+// `state_change_seq` is strictly greater than `fromSeq` (when given). Stale
+// events — a replay of the pre-prompt state — are ignored client-side and the
+// stream keeps draining; they never close the socket or clear the timer.
+//
+// This replaces a one-shot `events.wait` that used to send `from_seq` and rely
+// on herdr to filter. Real herdr does not implement `from_seq`, so the one-shot
+// form cannot keep waiting past a stale reply. The stream form drains until a
+// non-stale match resolves (or the timeout fires). Free-standing so the test
+// harness drives the same framing.
 export function waitForStatusOverSocket(
   socketPath: string,
   paneId: string,
@@ -182,20 +192,24 @@ export function waitForStatusOverSocket(
   return new Promise((resolve, reject) => {
     let socket: Socket | null = null;
     let buffer = "";
-    const id = `wait:${paneId}`;
+    let settled = false;
+    const subId = `wait:${paneId}`;
+    const want = new Set<string>(statuses);
     const request = JSON.stringify({
-      id,
-      method: "events.wait",
+      id: subId,
+      method: "events.subscribe",
       params: {
-        match_event: {
-          event: "pane_agent_status_changed",
-          pane_id: paneId,
-          agent_status: statuses,
-        },
-        from_seq: opts.fromSeq,
-        timeout_ms: opts.timeoutMs,
+        subscriptions: [
+          { type: "pane.agent_status_changed", pane_id: paneId },
+        ],
       },
     });
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
 
     const cleanup = () => {
       socket?.destroy();
@@ -203,8 +217,10 @@ export function waitForStatusOverSocket(
     };
 
     const timer = setTimeout(() => {
-      cleanup();
-      reject(new HerdrError("wait_timeout", `no status change for ${paneId}`));
+      finish(() => {
+        cleanup();
+        reject(new HerdrError("wait_timeout", `no status change for ${paneId}`));
+      });
     }, opts.timeoutMs + 500);
 
     try {
@@ -219,8 +235,10 @@ export function waitForStatusOverSocket(
 
     socket.on("error", (e) => {
       clearTimeout(timer);
-      cleanup();
-      reject(new HerdrError("socket_error", e.message, e));
+      finish(() => {
+        cleanup();
+        reject(new HerdrError("socket_error", e.message, e));
+      });
     });
 
     socket.on("data", (chunk) => {
@@ -232,13 +250,9 @@ export function waitForStatusOverSocket(
         if (line.trim() === "") continue;
         let env: {
           id?: string;
-          result?: {
-            type: string;
-            event?: {
-              event: string;
-              data?: { agent_status?: AgentSnapshot["agent_status"] } & Partial<AgentSnapshot>;
-            };
-          };
+          result?: { type: string };
+          event?: string;
+          data?: { agent_status?: AgentSnapshot["agent_status"] } & Partial<AgentSnapshot>;
           error?: { code: string; message: string };
         };
         try {
@@ -246,25 +260,44 @@ export function waitForStatusOverSocket(
         } catch {
           continue;
         }
-        if (env.id !== id) continue;
-        clearTimeout(timer);
-        cleanup();
-        if (env.error) {
-          reject(new HerdrError(env.error.code, env.error.message));
+
+        // Error reply to the subscribe request itself.
+        if (env.id === subId && env.error) {
+          clearTimeout(timer);
+          finish(() => {
+            cleanup();
+            reject(new HerdrError(env.error!.code, env.error!.message));
+          });
           return;
         }
-        const data = env.result?.event?.data;
-        if (data && data.agent_status && data.pane_id) {
-          if (opts.fromSeq !== undefined && data.state_change_seq !== undefined) {
-            if (data.state_change_seq <= opts.fromSeq) {
-              // stale replay of the pre-prompt state — keep waiting
-              return;
-            }
-          }
-          resolve(data as AgentSnapshot);
-        } else {
-          reject(new HerdrError("wait_no_data", "events.wait returned no data"));
+
+        // subscription_started ack — nothing to resolve on.
+        if (env.result?.type === "subscription_started") continue;
+
+        if (env.event !== "pane.agent_status_changed") continue;
+        const data = env.data;
+        if (!data || !data.pane_id || !data.agent_status) continue;
+        if (data.pane_id !== paneId) continue;
+        if (!want.has(data.agent_status)) continue;
+
+        // Stale check FIRST: a replay of the pre-prompt state (seq <= fromSeq)
+        // must not resolve, must not clean up, must not clear the timer. The
+        // socket stays open and the stream keeps draining for the next event.
+        if (
+          opts.fromSeq !== undefined &&
+          data.state_change_seq !== undefined &&
+          data.state_change_seq <= opts.fromSeq
+        ) {
+          continue;
         }
+
+        // Genuine non-stale match — resolve and tear down.
+        clearTimeout(timer);
+        finish(() => {
+          cleanup();
+          resolve(data as AgentSnapshot);
+        });
+        return;
       }
     });
   });
