@@ -25,11 +25,11 @@ function handle() {
 }
 
 /** Write a Claude-format agent file under a fresh temp dir; return its path. */
-function writeBusAgent(file: string, frontmatter: string): string {
+function writeBusAgent(file: string, frontmatter: string, body = ""): string {
   const dir = mkdtempSync(join(tmpdir(), "herdr-bus-agent-"));
   mkdirSync(dir, { recursive: true });
   const path = join(dir, file);
-  writeFileSync(path, `---\n${frontmatter}\n---\n`);
+  writeFileSync(path, `---\n${frontmatter}\n---\n${body}`);
   return path;
 }
 
@@ -300,6 +300,193 @@ describe("before_agent_start onboarding injection", () => {
       expect(result.systemPrompt.endsWith(onboarding)).toBe(true);
     } finally {
       restore();
+    }
+  });
+});
+
+describe("before_agent_start: --agent consumption", () => {
+  // spec §7: a child launched as `herdr agent start --kind pi -- --agent <name>`
+  // must get the resolved agent's system prompt appended and its initialPrompt
+  // injected. The `--agent` flag is read back through pi.getFlag (research §1.1).
+  const onboarding = readFileSync(ONBOARDING_PATH, "utf8");
+
+  function beforeHandler(pi: FakePi): CapturedHandler {
+    const h = pi.handlers.get("before_agent_start");
+    if (!h) throw new Error("before_agent_start handler not registered");
+    return h;
+  }
+
+  function fire(pi: FakePi, systemPrompt = "BASE"): Promise<any> {
+    return beforeHandler(pi)({
+      type: "before_agent_start",
+      prompt: "x",
+      systemPrompt,
+      systemPromptOptions: {} as any,
+    });
+  }
+
+  /** Register one standalone agent over the bus so the registrar resolves it. */
+  function registerAgent(pi: FakePi, file: string, frontmatter: string, body = ""): void {
+    pi.busHandlers.get(REGISTER)!({
+      version: 1,
+      paths: [writeBusAgent(file, frontmatter, body)],
+      namespace: "",
+      source: "project",
+    });
+  }
+
+  it("appends a resolved agent's system prompt to the base prompt", async () => {
+    // Clear the gate so this asserts the agent append alone, independent of the
+    // ambient HERDR_SUBAGENT value the test process may inherit.
+    const restore = withEnv({ HERDR_SUBAGENT: undefined });
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      registerAgent(pi, "reviewer.md", "name: reviewer\ndescription: digs", "You review code thoroughly.");
+      pi.flagValues.set("agent", "reviewer");
+
+      const result = await fire(pi);
+
+      expect(result.systemPrompt).toBe("BASE\n\nYou review code thoroughly.");
+    } finally {
+      restore();
+    }
+  });
+
+  it("injects a resolved agent's initialPrompt as the first user turn", async () => {
+    const restore = withEnv({ HERDR_SUBAGENT: undefined });
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      registerAgent(pi, "reviewer.md", "name: reviewer\ndescription: digs\ninitialPrompt: Read the diff first.");
+      pi.flagValues.set("agent", "reviewer");
+
+      const result = await fire(pi);
+
+      expect(result.message).toEqual({
+        customType: "herdr-subagents:initial-prompt",
+        content: "Read the diff first.",
+        display: false,
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("composes onboarding and the agent prompt: onboarding first, agent last", async () => {
+    // When BOTH HERDR_SUBAGENT is set AND --agent is passed, the child gets
+    // onboarding AND the agent's system prompt. Order: base → onboarding
+    // (general herdr-child framing) → agent role (most specific last).
+    const restore = withEnv({ HERDR_SUBAGENT: "1" });
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      registerAgent(pi, "reviewer.md", "name: reviewer\ndescription: digs", "AGENT ROLE PROMPT");
+      pi.flagValues.set("agent", "reviewer");
+
+      const result = await fire(pi);
+
+      expect(result.systemPrompt).toBe(`BASE\n\n${onboarding}\n\nAGENT ROLE PROMPT`);
+    } finally {
+      restore();
+    }
+  });
+
+  it("applies only the agent prompt when HERDR_SUBAGENT is absent", async () => {
+    // --agent is independent of the onboarding gate: a child launched with an
+    // agent but without HERDR_SUBAGENT still gets the agent's prompt.
+    const restore = withEnv({ HERDR_SUBAGENT: undefined });
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      registerAgent(pi, "reviewer.md", "name: reviewer\ndescription: digs", "AGENT ONLY");
+      pi.flagValues.set("agent", "reviewer");
+
+      const result = await fire(pi);
+
+      expect(result.systemPrompt).toBe("BASE\n\nAGENT ONLY");
+    } finally {
+      restore();
+    }
+  });
+
+  it("is a no-op when --agent is passed but resolves to nothing", async () => {
+    const restore = withEnv({ HERDR_SUBAGENT: undefined });
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      pi.flagValues.set("agent", "ghost");
+
+      const result = await fire(pi);
+
+      expect(result).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it("warns to stderr when a resolved agent declares unapplied spawn-time fields", async () => {
+    // thinking/turnBudget/skills cannot be applied from before_agent_start
+    // (spec §Out of Scope). The extension surfaces this as a one-line stderr
+    // warning rather than silently dropping the fields.
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      registerAgent(
+        pi,
+        "reviewer.md",
+        "name: reviewer\ndescription: digs\neffort: high\nmaxTurns: 5\nskills:\n  - code-review",
+      );
+      pi.flagValues.set("agent", "reviewer");
+
+      await fire(pi);
+
+      const out = spy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).toContain('"reviewer"');
+      expect(out).toContain("thinking");
+      expect(out).toContain("turnBudget");
+      expect(out).toContain("skills");
+      expect(out).toContain("not applied");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("warns at most once per session for the same agent", async () => {
+    // The warning is once-per-session so a multi-turn child does not spam. The
+    // guard is closure-scoped to one factory call (one session).
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      registerAgent(pi, "reviewer.md", "name: reviewer\ndescription: digs\neffort: high");
+      pi.flagValues.set("agent", "reviewer");
+
+      await fire(pi);
+      await fire(pi);
+
+      const writes = spy.mock.calls.filter((c) => String(c[0]).includes("reviewer"));
+      expect(writes).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not warn when a resolved agent declares only applied fields", async () => {
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const pi = createFakePi();
+      extension(pi as any);
+      registerAgent(pi, "reviewer.md", "name: reviewer\ndescription: digs", "You review code.");
+      pi.flagValues.set("agent", "reviewer");
+
+      await fire(pi);
+
+      const out = spy.mock.calls.map((c) => String(c[0])).join("");
+      expect(out).not.toContain("reviewer");
+    } finally {
+      spy.mockRestore();
     }
   });
 });

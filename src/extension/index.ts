@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createRegistrar, type Registrar, type RegisterPayload } from "./registrar.js";
+import type { ExtensionAPI, BeforeAgentStartEventResult } from "@earendil-works/pi-coding-agent";
+import { createRegistrar, type Registrar, type RegisterPayload, type AgentRecord } from "./registrar.js";
 import { registerParentRole } from "./parent-role.js";
 
 // herdr-subagents pi extension. This slice owns the agent-resolution role
@@ -12,6 +12,11 @@ import { registerParentRole } from "./parent-role.js";
 // here — the helper is the only one (spec §3).
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/** Append `extra` to `base`, collapsing to `extra` when the base is empty. */
+function appendPrompt(base: string, extra: string): string {
+  return base.length === 0 ? extra : `${base}\n\n${extra}`;
+}
 
 const ONBOARDING = readOnboarding();
 
@@ -118,17 +123,67 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
     }),
   );
 
+  // Spawn-time fields on an AgentRecord that this extension cannot apply from
+  // before_agent_start — they need upstream pi support (spec §Out of Scope).
+  // Warned once per session per agent so the limit surfaces honestly instead of
+  // being silently dropped. Closure-scoped: one factory call = one session.
+  const warnedUnapplied = new Set<string>();
+
+  function warnUnappliedFields(agent: AgentRecord): void {
+    const unapplied: string[] = [];
+    if (agent.thinking) unapplied.push("thinking");
+    if (agent.turnBudget) unapplied.push("turnBudget");
+    if (agent.skills && agent.skills.length > 0) unapplied.push("skills");
+    if (unapplied.length === 0) return;
+
+    const key = `${agent.name}@${unapplied.join(",")}`;
+    if (warnedUnapplied.has(key)) return;
+    warnedUnapplied.add(key);
+    process.stderr.write(
+      `herdr-subagents: agent "${agent.name}" declares ${unapplied.join("/")}; ` +
+        `these are not applied on pi (spawn-time fields, need upstream pi support — spec §Out of Scope)\n`,
+    );
+  }
+
   pi.on("before_agent_start", async (event) => {
-    // The gate is implementation-only (CONTEXT.md): presence means "this
-    // session is a child". Absent → a normal session pays nothing.
-    if (process.env.HERDR_SUBAGENT == null) return;
+    let systemPrompt: string | undefined;
+    let message: BeforeAgentStartEventResult["message"];
 
-    // Append, do not replace (spec §6/§7): pi's operational prompt layer must
-    // survive — context and system-prompt are the same layer of authority.
-    const base = event.systemPrompt;
-    const systemPrompt = base.length === 0 ? ONBOARDING : `${base}\n\n${ONBOARDING}`;
+    // Onboarding (spec §6): injected only for herdr-launched children, gated
+    // by HERDR_SUBAGENT presence. Absent → a normal session pays nothing.
+    if (process.env.HERDR_SUBAGENT != null) {
+      systemPrompt = appendPrompt(event.systemPrompt, ONBOARDING);
+    }
 
-    return { systemPrompt };
+    // Agent-definition consumption (spec §7): apply the resolved agent's
+    // system prompt and initial prompt. Runs independently of onboarding — a
+    // child can be launched with `--agent` but without HERDR_SUBAGENT. The
+    // `--agent` flag is registered declaratively above (research §1.1).
+    const agentName = pi.getFlag("agent");
+    if (typeof agentName === "string" && agentName.length > 0) {
+      const agent = registrar.resolve(agentName);
+      if (agent) {
+        warnUnappliedFields(agent);
+        // Onboarding first (general herdr-child framing), then the agent's
+        // role prompt — most specific last so it is the most prominent.
+        if (agent.systemPrompt) {
+          systemPrompt = appendPrompt(systemPrompt ?? event.systemPrompt, agent.systemPrompt);
+        }
+        if (agent.initialPrompt) {
+          message = {
+            customType: "herdr-subagents:initial-prompt",
+            content: agent.initialPrompt,
+            display: false,
+          };
+        }
+      }
+    }
+
+    if (systemPrompt === undefined && message === undefined) return;
+    const result: BeforeAgentStartEventResult = {};
+    if (systemPrompt !== undefined) result.systemPrompt = systemPrompt;
+    if (message !== undefined) result.message = message;
+    return result;
   });
 
   pi.on("session_shutdown", async () => {

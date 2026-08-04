@@ -225,6 +225,30 @@ describe("resolveAgents — field mapping", () => {
     expect(agent!.initialPrompt).toBe("Start by reading the diff.");
   });
 
+  it("captures the Markdown body below the frontmatter as the system prompt", () => {
+    // The Claude format puts the system prompt in the file body, after the
+    // frontmatter fence. parseAgentFile must carry it onto the record so the
+    // extension can append it at launch (spec §7).
+    writeAgent(
+      join(fx.root, ".claude", "agents"),
+      "reviewer.md",
+      "name: reviewer\ndescription: x",
+      "You are a code reviewer. Be thorough and kind.",
+    );
+
+    const [agent] = resolveAgents({ cwd: fx.root }).agents;
+
+    expect(agent!.systemPrompt).toBe("You are a code reviewer. Be thorough and kind.");
+  });
+
+  it("omits systemPrompt when the file has no body", () => {
+    writeAgent(join(fx.root, ".claude", "agents"), "reviewer.md", BASE_FM);
+
+    const [agent] = resolveAgents({ cwd: fx.root }).agents;
+
+    expect(agent!.systemPrompt).toBeUndefined();
+  });
+
   it("drops tools, disallowedTools, model, mcpServers silently", () => {
     writeAgent(
       join(fx.root, ".claude", "agents"),
