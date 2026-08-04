@@ -1,10 +1,15 @@
 // A stub herdr socket server for black-box tests. Speaks newline-delimited
-// JSON-RPC: answers `events.wait` requests by matching the requested statuses
-// against a scripted event timeline, and times out when none match.
+// JSON-RPC. It supports two methods:
 //
-// Tests script the server with a list of status events to emit for each pane.
-// The helper's real socket client (waitForStatusOverSocket) connects here, so
-// the framing of `events.wait` — the load-bearing socket call — is exercised.
+// - `events.subscribe` (stream): acks `subscription_started`, then pushes
+//   every scripted status event whose pane the connection subscribed to.
+// - `events.wait` (one-shot): replies with the first scripted event matching
+//   the requested pane/status, or times out.
+//
+// Mirrors real herdr: it does NOT filter by `from_seq`. The scripted event
+// timeline is delivered as-is, including events at or below any seq the
+// client might carry — the client filters stale events itself. Filtering
+// server-side would paper over the exact bug the client must defend against.
 
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -18,9 +23,9 @@ export interface ScriptedEvent {
   // Delay before the event becomes available, in ms. Lets tests model the
   // stall window: an event that never appears within the window = dropped.
   delayMs?: number;
-  // Deliver only on the Nth matching `events.wait` for this pane (1-based).
-  // Models a dropped first prompt: the first wait sees nothing and times out,
-  // the resend's wait matches.
+  // Deliver only on the Nth subscribe/wait for this pane (1-based). Models a
+  // dropped first prompt: the first attempt sees nothing and times out, the
+  // resend's attempt matches.
   deliverOnAttempt?: number;
 }
 
@@ -32,11 +37,11 @@ export interface StreamedChange {
 }
 
 export interface StubServerOptions {
-  // Events the server will surface, in order. A `events.wait` matches when an
-  // event for the pane with a requested status (and seq > fromSeq) is due.
+  // Events the server will surface, in order. A subscribe/wait matches when an
+  // event for the pane with a requested status is due. No seq filtering —
+  // stale events (seq at or below any client `from_seq`) are delivered and
+  // left for the client to drop, exactly as real herdr does.
   events?: ScriptedEvent[];
-  // When no matching event arrives, the server replies with this error after
-  // the wait's own timeout (mirrors real herdr).
 }
 
 export class StubHerdrServer {
@@ -46,10 +51,18 @@ export class StubHerdrServer {
   private streamQueue: StreamedChange[] = [];
   private sockets = new Set<Socket>();
   private tmpDir: string;
+  // Per-method attempt counters keyed by pane: how many subscribe connections
+  // or wait requests have targeted this pane. Drives `deliverOnAttempt`.
+  private subAttempts: Record<string, number> = {};
   private waitAttempts: Record<string, number> = {};
-  // Per-connection state: which panes it subscribed to, and which queued
-  // changes it has already received (so a re-subscribe does not replay).
-  private connState = new Map<Socket, { watched: Set<string>; delivered: Set<number> }>();
+  // Per-connection state: panes subscribed (pane-scoped keyed on pane_id,
+  // pane.created keyed on the type), which scripted events it already received
+  // (so a re-subscribe does not replay), and which queued stream changes it
+  // already received.
+  private connState = new Map<
+    Socket,
+    { watched: Set<string>; scriptedDelivered: Set<number>; streamedDelivered: Set<number> }
+  >();
 
   constructor(opts: StubServerOptions = {}) {
     this.tmpDir = mkdtempSync(join(tmpdir(), "herdr-stub-"));
@@ -68,7 +81,7 @@ export class StubHerdrServer {
     for (const c of changes) this.streamQueue.push(c);
     // Re-evaluate delivery for every live connection (a stream() call after a
     // re-subscribe must reach the new pane).
-    for (const socket of this.sockets) this.deliverQueued(socket);
+    for (const socket of this.sockets) this.deliverStreamed(socket);
   }
 
   // Broadcast a pane.created event to every connection subscribed to it. A
@@ -106,7 +119,11 @@ export class StubHerdrServer {
 
   private handle(socket: Socket): void {
     this.sockets.add(socket);
-    this.connState.set(socket, { watched: new Set(), delivered: new Set() });
+    this.connState.set(socket, {
+      watched: new Set(),
+      scriptedDelivered: new Set(),
+      streamedDelivered: new Set(),
+    });
     let buffer = "";
     socket.on("data", (chunk) => {
       buffer += chunk.toString();
@@ -137,26 +154,67 @@ export class StubHerdrServer {
     const subs = req.params.subscriptions ?? [];
     const state = this.connState.get(socket) ?? {
       watched: new Set<string>(),
-      delivered: new Set<number>(),
+      scriptedDelivered: new Set<number>(),
+      streamedDelivered: new Set<number>(),
     };
     // pane.created subscriptions carry no pane_id; we key them on the type so
     // pushPaneCreated can find subscribers. pane-scoped subscriptions key on
-    // the pane_id.
-    for (const s of subs) state.watched.add(s.pane_id ?? s.type);
+    // the pane_id. Bump the per-pane subscribe attempt the first time this
+    // connection subscribes to it — that is what `deliverOnAttempt` keys on.
+    for (const s of subs) {
+      const key = s.pane_id ?? s.type;
+      if (s.pane_id && !state.watched.has(key)) {
+        this.subAttempts[s.pane_id] = (this.subAttempts[s.pane_id] ?? 0) + 1;
+      }
+      state.watched.add(key);
+    }
     this.connState.set(socket, state);
     socket.write(JSON.stringify({ id: req.id, result: { type: "subscription_started" } }) + "\n");
-    this.deliverQueued(socket);
+    this.deliverScripted(socket);
+    this.deliverStreamed(socket);
   }
 
-  // Push every queued change whose pane this connection now watches, marking
-  // each delivered so a later re-subscribe does not replay it.
-  private deliverQueued(socket: Socket): void {
+  // Push every scripted event whose pane this connection now watches, marking
+  // each delivered so a later re-subscribe does not replay it. No `from_seq`
+  // filtering — stale events are delivered and left to the client to drop.
+  private deliverScripted(socket: Socket): void {
+    const state = this.connState.get(socket);
+    if (!state) return;
+    this.events.forEach((ev, idx) => {
+      if (state.scriptedDelivered.has(idx)) return;
+      if (!state.watched.has(ev.paneId)) return;
+      if (ev.deliverOnAttempt !== undefined) {
+        const attempt = this.subAttempts[ev.paneId] ?? 0;
+        if (attempt !== ev.deliverOnAttempt) return;
+      }
+      state.scriptedDelivered.add(idx);
+      const push = () => {
+        if (!this.sockets.has(socket)) return;
+        socket.write(
+          JSON.stringify({
+            event: "pane.agent_status_changed",
+            data: {
+              pane_id: ev.paneId,
+              agent_status: ev.status,
+              state_change_seq: ev.seq,
+            },
+          }) + "\n",
+        );
+      };
+      if (ev.delayMs) setTimeout(push, ev.delayMs);
+      else push();
+    });
+  }
+
+  // Push every queued stream change whose pane this connection now watches,
+  // marking each delivered so a later re-subscribe does not replay it.
+  private deliverStreamed(socket: Socket): void {
     const state = this.connState.get(socket);
     if (!state) return;
     this.streamQueue.forEach((change, idx) => {
-      if (state.delivered.has(idx)) return;
+      if (state.streamedDelivered.has(idx)) return;
       if (!state.watched.has(change.paneId)) return;
-      state.delivered.add(idx);
+      state.streamedDelivered.add(idx);
       const push = () => {
         if (!this.sockets.has(socket)) return;
         socket.write(
@@ -181,7 +239,6 @@ export class StubHerdrServer {
           agent_status?: string[];
         };
         subscriptions?: Array<{ type: string; pane_id: string }>;
-        from_seq?: number;
         timeout_ms?: number;
       };
     };
@@ -198,16 +255,17 @@ export class StubHerdrServer {
 
     const paneId = req.params.match_event?.pane_id ?? "";
     const statuses = req.params.match_event?.agent_status ?? [];
-    const fromSeq = req.params.from_seq;
 
     this.waitAttempts[paneId] = (this.waitAttempts[paneId] ?? 0) + 1;
     const attempt = this.waitAttempts[paneId];
 
+    // No `from_seq` filtering — real herdr does not implement it, so the stub
+    // must not either. Deliver the first scripted event matching the pane and
+    // status (and deliverOnAttempt), regardless of seq.
     const due = this.events.find(
       (e) =>
         e.paneId === paneId &&
         statuses.includes(e.status) &&
-        (fromSeq === undefined || e.seq > fromSeq) &&
         (e.deliverOnAttempt === undefined || e.deliverOnAttempt === attempt),
     );
 

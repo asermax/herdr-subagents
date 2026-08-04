@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { spawnChild } from "../src/helper/spawn";
 import { waitChild } from "../src/helper/collect";
+import { waitForStatusOverSocket } from "../src/helper/herdr-client";
 import { FakeHerdrClient, type Call } from "./fake-client";
 import { StubHerdrServer, type ScriptedEvent } from "./stub-server";
 import type { AgentSnapshot } from "../src/helper/herdr-types";
@@ -79,6 +80,77 @@ describe("wait", () => {
       await waitChild("w1Z:p1", client, 2000);
       const wait = client.calls.find((c: Call) => c.method === "events.wait")!;
       expect(wait.args.statuses).not.toContain("blocked");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+// waitForStatusOverSocket filters stale events client-side: herdr does not
+// implement `from_seq`, so the stub delivers stale events and the client must
+// skip them. A stale event (state_change_seq <= fromSeq) keeps the stream
+// open; the wait resolves only on a genuinely newer match (or times out).
+describe("waitForStatusOverSocket stale-event filtering", () => {
+  it("skips a stale event and resolves on the subsequent non-stale event", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      // fromSeq=5: the seq-5 working event is stale (a replay of the
+      // pre-prompt state); the seq-6 done event is fresh.
+      server.script([
+        { paneId: "w1Z:p1", status: "working", seq: 5 } as ScriptedEvent,
+        { paneId: "w1Z:p1", status: "done", seq: 6 } as ScriptedEvent,
+      ]);
+      const snap = await waitForStatusOverSocket(
+        server.socketPath,
+        "w1Z:p1",
+        ["working", "done"],
+        { timeoutMs: 2000, fromSeq: 5 },
+      );
+      // It must NOT resolve on the stale seq-5 working event.
+      expect(snap.agent_status).toBe("done");
+      expect(snap.state_change_seq).toBe(6);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("times out when only a stale event arrives (does not deadlock)", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      // Only a stale event is scripted. The client must skip it and keep
+      // draining — the wait then times out rather than hanging forever.
+      server.script([
+        { paneId: "w1Z:p1", status: "working", seq: 5 } as ScriptedEvent,
+      ]);
+      await expect(
+        waitForStatusOverSocket(
+          server.socketPath,
+          "w1Z:p1",
+          ["working", "done"],
+          { timeoutMs: 300, fromSeq: 5 },
+        ),
+      ).rejects.toMatchObject({ code: "wait_timeout" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("resolves on a matching event when fromSeq is not set", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      server.script([
+        { paneId: "w1Z:p1", status: "done", seq: 1 } as ScriptedEvent,
+      ]);
+      const snap = await waitForStatusOverSocket(
+        server.socketPath,
+        "w1Z:p1",
+        ["done"],
+        { timeoutMs: 2000 },
+      );
+      expect(snap.agent_status).toBe("done");
     } finally {
       await server.close();
     }
