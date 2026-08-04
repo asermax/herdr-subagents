@@ -4,6 +4,7 @@ import type { Harness } from "./harness.ts";
 import { srcDir } from "./paths.ts";
 import { substitute } from "./substitute.ts";
 import type { TokenMap } from "./tokens.ts";
+import { readVersion } from "./version.ts";
 
 /**
  * One file the build produces for an artifact.
@@ -55,11 +56,12 @@ export function filePlan(harness: Harness): EmitFile[] {
       // (matches @asermax/pi-cc-plugins' shape). Token-free, copied verbatim.
       { dest: "extension/index.ts", type: "copy", src: "extension/index.ts" },
       { dest: "extension/parent-role.ts", type: "copy", src: "extension/parent-role.ts" },
+      { dest: "extension/registrar.ts", type: "copy", src: "extension/registrar.ts" },
       // The helper binary, bundled to a single executable at the package root
       // so the extension (and the {{helper}} token) can spawn it by absolute
       // path (spec §3). herdr-helper resolves relative to the package root.
       { dest: "herdr-helper", type: "bundle", src: "helper/cli.ts" },
-      { dest: "package.json", type: "generate", render: () => piManifest() },
+      { dest: "package.json", type: "generate", render: () => piManifest(readVersion()) },
     ];
   }
 
@@ -77,7 +79,15 @@ export function filePlan(harness: Harness): EmitFile[] {
     {
       dest: ".claude-plugin/plugin.json",
       type: "generate",
-      render: () => claudeManifest(),
+      render: () => claudeManifest(readVersion()),
+    },
+    // The same tree doubles as a single-plugin marketplace (spec §9): the
+    // orphan claude-marketplace branch holds this file at its root so
+    // `claude plugin install --marketplace asermax/herdr-subagents` works.
+    {
+      dest: ".claude-plugin/marketplace.json",
+      type: "generate",
+      render: () => claudeMarketplace(readVersion()),
     },
   ];
 }
@@ -97,15 +107,23 @@ function claudeDelegateSkill(map: TokenMap): string {
   return frontmatter + substitute(readSrc(PROTOCOL), map);
 }
 
-function piManifest(): string {
+function piManifest(version: string): string {
   return (
     JSON.stringify(
       {
         name: "@asermax/pi-herdr-subagents",
-        version: "0.0.0",
+        version,
         description: "Delegate coding-agent work by spawning other agents as herdr tabs.",
         type: "module",
         license: "MIT",
+        keywords: ["pi-package", "pi-extension"],
+        repository: {
+          type: "git",
+          url: "git+https://github.com/asermax/herdr-subagents.git",
+        },
+        publishConfig: {
+          access: "public",
+        },
         // The helper binary, invokable by absolute path from the extension and
         // the {{helper}} skill token (spec §3).
         bin: {
@@ -120,6 +138,11 @@ function piManifest(): string {
         peerDependencies: {
           "@earendil-works/pi-coding-agent": "*",
         },
+        peerDependenciesMeta: {
+          "@earendil-works/pi-coding-agent": {
+            optional: true,
+          },
+        },
       },
       null,
       2,
@@ -127,14 +150,47 @@ function piManifest(): string {
   );
 }
 
-function claudeManifest(): string {
+function claudeManifest(version: string): string {
   return (
     JSON.stringify(
       {
         name: "herdr-subagents",
-        version: "0.0.0",
+        version,
         description: "Delegate coding-agent work by spawning other agents as herdr tabs.",
-        hooks: "hooks/hooks.json",
+        // Hooks are discovered by convention at hooks/hooks.json (research
+        // §6) — plugin.json carries no hooks pointer.
+        author: { name: "Agustín Carrasco" },
+        repository: "https://github.com/asermax/herdr-subagents",
+        homepage: "https://github.com/asermax/herdr-subagents",
+        license: "MIT",
+        keywords: ["delegation", "subagents", "herdr"],
+      },
+      null,
+      2,
+    ) + "\n"
+  );
+}
+
+function claudeMarketplace(version: string): string {
+  return (
+    JSON.stringify(
+      {
+        name: "herdr-subagents",
+        description: "herdr-subagents — coding-agent subagents as herdr tabs.",
+        owner: {
+          name: "Agustín Carrasco",
+          url: "https://github.com/asermax",
+        },
+        plugins: [
+          {
+            name: "herdr-subagents",
+            source: "./",
+            description: "Delegate coding-agent work by spawning other agents as herdr tabs.",
+            version,
+            category: "developer",
+            keywords: ["delegation", "subagents", "herdr"],
+          },
+        ],
       },
       null,
       2,

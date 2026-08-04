@@ -14,6 +14,27 @@ import { HerdrError } from "./herdr-types.js";
 
 const GATE = "HERDR_SUBAGENT";
 
+// The prefix for child-facing env the parent forwards down (spec §9 dev loop).
+// The gate itself is the bare HERDR_SUBAGENT; related signals use this prefix
+// so they ride the same always-shared channel (ADR-0003 named the convention).
+// herdr's own vars use the HERDR_* prefix; this one is ours.
+const CHILD_ENV_PREFIX = "HERDR_SUBAGENT_";
+
+/**
+ * Collect the child-facing env to set on a spawned tab: the gate plus every
+ * HERDR_SUBAGENT_* var the parent carries (always forwarded — no dev/prod
+ * switch). Anything else in process.env is inherited by the pane naturally.
+ */
+export function childEnv(parentEnv: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = { [GATE]: "1" };
+  for (const [key, value] of Object.entries(parentEnv)) {
+    if (key.startsWith(CHILD_ENV_PREFIX) && value) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
 export interface SpawnInput {
   kind: "pi" | "claude";
   agentName: string;
@@ -22,6 +43,13 @@ export interface SpawnInput {
   cwd: string;
   workspaceId: string;
   body: string;
+  // Extra argv forwarded to the child's harness (e.g. --extension, --skill on
+  // pi; --plugin-directory on claude). Empty in production. Computed by the
+  // caller from the parent's own launch argv (cli.ts).
+  passThroughArgs?: readonly string[];
+  // Extra env forwarded to the child's tab. Defaults to the gate plus
+  // HERDR_SUBAGENT_* vars from process.env.
+  passThroughEnv?: Record<string, string>;
 }
 
 export interface SpawnResult {
@@ -72,7 +100,8 @@ export async function spawnChild(
   const { client } = deps;
 
   // 1. Create the tab in the parent's workspace: parent's cwd, final label,
-  //    no focus, HERDR_SUBAGENT=1 in its environment.
+  //    no focus, the gate plus forwarded HERDR_SUBAGENT_* env in its environment.
+  const env = input.passThroughEnv ?? childEnv();
   let tabId: string;
   let paneId: string;
   try {
@@ -81,7 +110,7 @@ export async function spawnChild(
       cwd: input.cwd,
       label: input.label,
       focus: false,
-      env: { [GATE]: "1" },
+      env,
     });
     paneId = tab.pane_id;
     tabId = tab.tab_id;
@@ -147,7 +176,7 @@ async function startWithReadiness(
       kind: input.kind,
       paneId,
       timeoutMs: bounds.readinessTimeoutMs,
-      args: ["--agent", input.agentName],
+      args: ["--agent", input.agentName, ...(input.passThroughArgs ?? [])],
     });
     return { ok: true, agent };
   } catch (e) {

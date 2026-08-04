@@ -33,6 +33,41 @@ function parseArgs(argv: string[]): Record<string, string> {
   return out;
 }
 
+// Flags `spawn` claims for itself. Anything else on the parent's argv forwards
+// to the child's harness (spec §9: a parent under development passes the same
+// flags to its children; production passes nothing). Not an allowlist — the
+// complement of our own surface, so future flags forward by default.
+const SPAWN_OWN_FLAGS = new Set(["kind", "agent", "label", "body", "cwd", "workspace"]);
+
+/**
+ * Extract the argv slice to forward to a spawned child: every `--flag value`
+ * pair after the `spawn` subcommand that `spawn` does not consume itself.
+ * Re-emits them in their original `--flag value` / `--flag` form.
+ */
+function passthroughArgs(argv: string[]): string[] {
+  // Drop the subcommand (argv[0] after slice(2)).
+  const rest = argv.slice(3);
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined || !a.startsWith("--")) continue;
+    const key = a.slice(2);
+    if (SPAWN_OWN_FLAGS.has(key)) {
+      // Skip the value too if it is a non-flag token.
+      const next = rest[i + 1];
+      if (next !== undefined && !next.startsWith("--")) i++;
+      continue;
+    }
+    out.push(a);
+    const next = rest[i + 1];
+    if (next !== undefined && !next.startsWith("--")) {
+      out.push(next);
+      i++;
+    }
+  }
+  return out;
+}
+
 function emit(obj: unknown): void {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
@@ -99,7 +134,7 @@ async function runSpawn(flags: Record<string, string>): Promise<void> {
   const { client, registry } = buildDeps();
   try {
     const result: SpawnResult = await spawnChild(
-      { kind, agentName, label, cwd, workspaceId, body },
+      { kind, agentName, label, cwd, workspaceId, body, passThroughArgs: passthroughArgs(process.argv) },
       { client },
     );
     await registry.add({

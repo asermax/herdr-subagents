@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - run: npm install-scripts approve esbuild
+      - run: npm run typecheck
+      - run: npm test
+
+  install:
+    name: Real npm install path (pi package)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - run: npm install-scripts approve esbuild
+      - run: npm run build
+      # Pack the pi package the way npm publish would, then install the tarball
+      # globally into a clean npm prefix — the real install path (spec §9).
+      - name: Pack & install the pi package globally
+        run: |
+          cd build/out/pi
+          npm pack
+          tarball="$(pwd)/asermax-pi-herdr-subagents-$(node -p "require('./package.json').version").tgz"
+          cd "$RUNNER_TEMP"
+          npm install -g "$tarball"
+      # The installed package must resolve its entry, bin, and shipped skill.
+      # herdr-helper is on PATH; the package root is discoverable.
+      - name: Verify the installed package
+        run: |
+          herdr-helper --help >/dev/null 2>&1 || true
+          pkg_root="$(npm root -g)/@asermax/pi-herdr-subagents"
+          test -f "$pkg_root/package.json"
+          test -f "$pkg_root/herdr-helper"
+          test -f "$pkg_root/extension/index.ts"
+          test -f "$pkg_root/extension/registrar.ts"
+          test -f "$pkg_root/extension/parent-role.ts"
+          test -f "$pkg_root/skills/delegate.md"
+          test -f "$pkg_root/skills/onboarding.md"
+          # The static skill registration is present in the manifest.
+          node -e "const m=require('$pkg_root/package.json'); \
+            if(!m.pi||!m.pi.skills||!m.pi.skills.includes('./skills')) process.exit(1); \
+            if(!m.pi.extensions||!m.pi.extensions.includes('./extension/index.ts')) process.exit(1); \
+            if(m.peerDependencies['@earendil-works/pi-coding-agent']!=='*') process.exit(1); \
+            if(!m.peerDependenciesMeta['@earendil-works/pi-coding-agent'].optional) process.exit(1);"
+
+  validate-plugin:
+    name: Validate the Claude plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - run: npm install-scripts approve esbuild
+      - run: npm run build
+      # Install the Claude CLI so `claude plugin validate` is available; fall
+      # back to a structural check if it is not. The structural check is the
+      # minimum contract (manifest + skill + hook), not a substitute for the
+      # real validator.
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Validate plugin & marketplace manifests (strict)
+        run: |
+          claude plugin validate build/out/claude --strict
+          claude plugin validate build/out/claude/.claude-plugin/plugin.json --strict
+          # tag --dry-run checks plugin.json and the marketplace entry agree.
+          cd build/out/claude && claude plugin tag --dry-run .
+
+  marketplace:
+    name: Regenerate claude-marketplace branch
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [test, install, validate-plugin]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - run: npm install-scripts approve esbuild
+      - run: npm run build
+      # The claude-marketplace branch is an orphan holding only the built
+      # plugin tree (spec §9): manifest, generated skill, hooks, marketplace
+      # manifest. Regenerated and force-pushed on every push to main.
+      - name: Publish orphan claude-marketplace branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          REMOTE="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Create the orphan branch fresh from the built output each time.
+          git checkout --orphan claude-marketplace
+          git rm -rf --quiet .
+          # Copy the built plugin tree to the branch root.
+          cp -r build/out/claude/. .
+          git add -A
+          git commit -m "chore(marketplace): regenerate @ ${GITHUB_SHA::7}"
+          git push "$REMOTE" HEAD:claude-marketplace --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
