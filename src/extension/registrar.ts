@@ -35,6 +35,9 @@ export interface AgentRecord {
   turnBudget?: { maxTurns: number };
   skills?: string[];
   initialPrompt?: string;
+  // The Markdown body below the frontmatter is the agent's system prompt in
+  // the Claude format; appended at launch (systemPromptMode: "append").
+  systemPrompt?: string;
   // Fixed application defaults (spec §7): the Claude format has no toggles for
   // these, so they are constant per agent.
   systemPromptMode: "append";
@@ -159,7 +162,7 @@ function parseAgentFile(path: string): ParsedFile | null {
     return null;
   }
 
-  const { frontmatter } = parseFrontmatter(raw);
+  const { frontmatter, body } = parseFrontmatter(raw);
   const name = stringField(frontmatter, "name");
   const description = stringField(frontmatter, "description");
   // Files require name and description (research §2.1, mirroring pi-subagents).
@@ -185,6 +188,8 @@ function parseAgentFile(path: string): ParsedFile | null {
 
   const initialPrompt = stringField(frontmatter, "initialPrompt");
   if (initialPrompt) record.initialPrompt = initialPrompt;
+
+  if (body.length > 0) record.systemPrompt = body;
 
   // Dropped silently (spec §7): tools, disallowedTools, model, mcpServers,
   // hooks, memory, background, isolation, color. They are parsed and ignored.
@@ -282,10 +287,10 @@ function qualifiedName(agent: { name: string; namespace: string }): string {
 
 type Frontmatter = Record<string, unknown>;
 
-function parseFrontmatter(raw: string): { frontmatter: Frontmatter } {
+function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string } {
   const frontmatter: Frontmatter = {};
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match || match[1] === undefined) return { frontmatter };
+  if (!match || match[1] === undefined) return { frontmatter, body: "" };
 
   const lines = match[1].split(/\r?\n/);
   let i = 0;
@@ -321,7 +326,9 @@ function parseFrontmatter(raw: string): { frontmatter: Frontmatter } {
     }
   }
 
-  return { frontmatter };
+  // The body after the closing fence is the agent's system prompt.
+  const body = raw.slice(match[0].length).replace(/^\r?\n+/, "").trim();
+  return { frontmatter, body };
 }
 
 /** Collect consecutive indented lines following a `key:` header. */
