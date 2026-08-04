@@ -89,6 +89,55 @@ describe("spawn tab creation", () => {
   });
 });
 
+// --- spawn: dev-loop forwarding (spec §9) ------------------------------
+// A parent under development passes the same flags to its children; production
+// passes nothing. Env forwarding is always-on (HERDR_SUBAGENT_* prefix); argv
+// forwarding is the complement of spawn's own flags.
+
+describe("spawn dev-loop forwarding", () => {
+  it("forwards HERDR_SUBAGENT_* env to the child tab alongside the gate", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
+    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+
+    await spawnChild(
+      defaultSpawnInput({
+        passThroughEnv: {
+          HERDR_SUBAGENT: "1",
+          HERDR_SUBAGENT_HELPER: "/repo/build/out/pi/herdr-helper",
+        },
+      }),
+      { client, bounds: { deliveryStallMs: 1000 } },
+    );
+
+    const createCall = client.calls.find((c) => c.method === "tab.create")!;
+    expect(createCall.args.env).toEqual({
+      HERDR_SUBAGENT: "1",
+      HERDR_SUBAGENT_HELPER: "/repo/build/out/pi/herdr-helper",
+    });
+  });
+
+  it("forwards passThroughArgs onto the child agent-start argv after --agent", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
+    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+
+    await spawnChild(
+      defaultSpawnInput({
+        passThroughArgs: ["--extension", "/repo/src/extension/index.ts", "--skill", "/repo/build/out/pi/skills"],
+      }),
+      { client, bounds: { deliveryStallMs: 1000 } },
+    );
+
+    const startCall = client.calls.find((c) => c.method === "agent.start")!;
+    expect(startCall.args.args).toEqual([
+      "--agent", "doer",
+      "--extension", "/repo/src/extension/index.ts",
+      "--skill", "/repo/build/out/pi/skills",
+    ]);
+  });
+});
+
 // --- spawn: verify-and-rename (2-of-4 case) -----------------------------
 
 describe("spawn verify-and-rename", () => {

@@ -29,13 +29,13 @@ const TERMINAL = new Set(["done", "gone"]);
 const here = dirname(fileURLToPath(import.meta.url));
 
 // The helper binary ships at the package root (build/harness.ts HELPER_BIN),
-// alongside the extension. The dev loop overrides with HERDR_HELPER so a
-// session loading the extension from source can point at the built helper.
+// alongside the extension. The dev loop overrides with HERDR_SUBAGENT_HELPER
+// (forwarded to children by spawn) so a session loading the extension from
+// source can point at the built helper.
 export function helperPath(): string {
-  const override = process.env.HERDR_HELPER;
+  const override = process.env.HERDR_SUBAGENT_HELPER;
   if (override) return override;
-  // extension/<file> → package root → herdr-helper. The dev loop overrides
-  // with HERDR_HELPER (the helper is not at src/herdr-helper in source).
+  // extension/<file> → package root → herdr-helper.
   return join(dirname(here), "herdr-helper");
 }
 

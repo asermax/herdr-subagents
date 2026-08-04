@@ -4,6 +4,9 @@
   "private": true,
   "description": "Coding-agent subagents as herdr tabs.",
   "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
   "bin": {
     "herdr-helper": "dist/helper/cli.js"
   },
@@ -21,5 +24,9 @@
     "esbuild": "^0.28.1",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "esbuild@0.21.5": true
   }
 }
