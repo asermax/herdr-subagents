@@ -64,10 +64,27 @@ export class Registry {
     private readonly probe: (paneId: string) => Promise<AgentSnapshot | null>,
   ) {}
 
+  // Read-modify-write guard: setStatus (watch) and add (spawn) land
+  // concurrently; without serialization, overlapping reads lose a change. A
+  // promise-chain lock — each op awaits the previous tail — is enough.
+  private chain: Promise<void> = Promise.resolve();
+
+  private serialized<T>(run: () => Promise<T>): Promise<T> {
+    const result = this.chain.then(run);
+    // A failing op must not break the next: keep the chain always-settled.
+    this.chain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   async add(entry: RegistryEntry): Promise<void> {
-    const entries = await this.store.read();
-    entries[entry.pane_id] = entry;
-    await this.store.write(entries);
+    return this.serialized(async () => {
+      const entries = await this.store.read();
+      entries[entry.pane_id] = entry;
+      await this.store.write(entries);
+    });
   }
 
   async get(paneId: string): Promise<RegistryEntry | null> {
@@ -76,17 +93,21 @@ export class Registry {
   }
 
   async setStatus(paneId: string, status: AgentStatus): Promise<void> {
-    const entries = await this.store.read();
-    if (entries[paneId]) {
-      entries[paneId].status = status;
-      await this.store.write(entries);
-    }
+    return this.serialized(async () => {
+      const entries = await this.store.read();
+      if (entries[paneId]) {
+        entries[paneId].status = status;
+        await this.store.write(entries);
+      }
+    });
   }
 
   async remove(paneId: string): Promise<void> {
-    const entries = await this.store.read();
-    delete entries[paneId];
-    await this.store.write(entries);
+    return this.serialized(async () => {
+      const entries = await this.store.read();
+      delete entries[paneId];
+      await this.store.write(entries);
+    });
   }
 
   // Lists every tracked child. Each entry is probed against herdr: if the pane

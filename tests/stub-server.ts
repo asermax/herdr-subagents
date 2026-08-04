@@ -101,6 +101,23 @@ export class StubHerdrServer {
     }
   }
 
+  // Broadcast a pane.closed event to every connection subscribed to it. A
+  // pane.closed subscription is workspace-wide (no pane_id), so any
+  // connection that subscribed to the type receives it.
+  pushPaneClosed(paneId: string): void {
+    for (const socket of this.sockets) {
+      const state = this.connState.get(socket);
+      if (!state || !state.watched.has("pane.closed")) continue;
+      if (!this.sockets.has(socket)) continue;
+      socket.write(
+        JSON.stringify({
+          event: "pane.closed",
+          data: { pane_id: paneId },
+        }) + "\n",
+      );
+    }
+  }
+
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((socket) => this.handle(socket));

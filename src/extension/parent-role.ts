@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,15 +29,28 @@ const TERMINAL = new Set(["done", "gone"]);
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// The helper binary ships at the package root (build/harness.ts HELPER_BIN),
-// alongside the extension. The dev loop overrides with HERDR_SUBAGENT_HELPER
+// The helper binary ships at the package root (build/plan.ts emits
+// `herdr-helper` there). The dev loop overrides with HERDR_SUBAGENT_HELPER
 // (forwarded to children by spawn) so a session loading the extension from
 // source can point at the built helper.
 export function helperPath(): string {
   const override = process.env.HERDR_SUBAGENT_HELPER;
   if (override) return override;
-  // extension/<file> → package root → herdr-helper.
-  return join(dirname(here), "herdr-helper");
+  return join(packageRoot(here), "herdr-helper");
+}
+
+// Walk up from `start` to the nearest directory holding a package.json — the
+// package root. Robust to compiled layouts (e.g. extension shipped under
+// <pkg>/dist/extension/) where the extension file is not one level under the
+// root. Falls back to `start` if no package.json is found.
+export function packageRoot(start: string): string {
+  let dir = start;
+  for (;;) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return start;
+    dir = parent;
+  }
 }
 
 export interface StatusCard {

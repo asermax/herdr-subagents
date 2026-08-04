@@ -187,8 +187,10 @@ function lastClaudeAssistant(text: string): string | undefined {
   return lastAssistantMatching(text, (entry) => {
     // accept entries typed assistant OR role-tagged assistant (transcript variants)
     if (entry.type !== "assistant" && entry.message?.role !== "assistant") return undefined;
-    // A complete message has a non-null stop_reason. Mid-stream entries lag.
-    if (entry.message?.stop_reason === null) return undefined;
+    // A complete message carries a non-null string stop_reason (e.g.
+    // "end_turn"). Mid-stream entries carry null; some variants omit it
+    // entirely — both read as incomplete.
+    if (typeof entry.message?.stop_reason !== "string") return undefined;
     return extractText(entry.message?.content);
   });
 }

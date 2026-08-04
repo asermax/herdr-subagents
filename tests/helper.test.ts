@@ -14,7 +14,7 @@ async function expectFail<T>(p: Promise<T>): Promise<SpawnFailure> {
   throw new Error("expected spawn to fail");
 }
 import type { AgentSnapshot } from "../src/helper/herdr-types.js";
-import { fileRegistryStore, Registry } from "../src/helper/registry.js";
+import { fileRegistryStore, Registry, type RegistryEntry, type RegistryStore } from "../src/helper/registry.js";
 import { StubHerdrServer, type ScriptedEvent } from "./stub-server.js";
 import { FakeHerdrClient } from "./fake-client.js";
 
@@ -176,6 +176,26 @@ describe("spawn verify-and-rename", () => {
     const closes = client.calls.filter((c) => c.method === "tab.close");
     expect(closes.length).toBe(1);
     expect(failure.pane_id).toBe("w1Z:p1");
+  });
+
+  it("does not rename a pane that is briefly not detected, and recovers", async () => {
+    const client = new FakeHerdrClient({
+      socketPath: server.socketPath,
+      snapshots: { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) },
+      // First get reports `unknown` (transient detection-loss); the next detects.
+      snapshotByGetIndex: {
+        "w1Z:p1": (idx) => (idx === 1 ? { agent_status: "unknown" } : undefined),
+      },
+    });
+    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+
+    await spawnChild(defaultSpawnInput(), { client, bounds: { deliveryStallMs: 1000 } });
+
+    // No rename attempted on a not-detected pane (it would fail and close the tab).
+    const renames = client.calls.filter((c) => c.method === "agent.rename");
+    expect(renames).toHaveLength(0);
+    const closes = client.calls.filter((c) => c.method === "tab.close");
+    expect(closes).toHaveLength(0);
   });
 });
 
@@ -486,6 +506,60 @@ describe("collect", () => {
     expect(reads).toBeGreaterThanOrEqual(2);
   });
 
+  it("treats a missing stop_reason as incomplete, not complete", async () => {
+    const logPath = join(tmpDir, "missing-stop.jsonl");
+    // Newest entry omits stop_reason (a mid-stream flush variant); the older
+    // one is complete. Collect must skip the mid-stream entry and return the
+    // prior complete message.
+    writeFileSync(
+      logPath,
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            stop_reason: "end_turn",
+            content: [{ type: "text", text: "the complete turn" }],
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "mid-stream, no stop_reason" }],
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = {
+      "w1Z:p1": makeSnapshot({
+        agent_status: "done",
+        agent_session: { kind: "id", value: "uuid-missing" },
+      }),
+    };
+    const registry = makeRegistry(client);
+    await registry.add({
+      pane_id: "w1Z:p1",
+      tab_id: "w1Z:t1",
+      workspace_id: "w1Z",
+      label: "do the thing",
+      agent: "doer",
+      kind: "claude",
+      agent_name: "doer",
+      status: "idle",
+    });
+
+    const payload = await collectChild("w1Z:p1", {
+      client,
+      registry,
+      resolveClaudeSession: () => logPath,
+    });
+
+    expect(payload.message).toBe("the complete turn");
+  });
+
   it("returns blocked status without a message", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
     client.opts.snapshots = {
@@ -560,5 +634,87 @@ describe("list stale detection", () => {
     const child = children[0]!;
     expect(child.stale).toBe(false);
     expect(child.status).toBe("done");
+  });
+});
+
+// --- registry serialization (read-modify-write guard) ------------------
+
+// A store that yields a tick on both read and write, so concurrent
+// read-modify-write spans overlap unless the registry serializes them. Tracks
+// how many spans ran at once.
+function yieldingStore(): {
+  store: RegistryStore;
+  maxActive: () => number;
+  entries: () => Record<string, RegistryEntry>;
+} {
+  let data: Record<string, RegistryEntry> = {};
+  let active = 0;
+  let maxActive = 0;
+  const store: RegistryStore = {
+    async read() {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 1));
+      return { ...data };
+    },
+    async write(entries: Record<string, RegistryEntry>) {
+      await new Promise((r) => setTimeout(r, 1));
+      data = { ...entries };
+      active -= 1;
+    },
+  };
+  return { store, maxActive: () => maxActive, entries: () => data };
+}
+
+function makeRegistryEntry(paneId: string): RegistryEntry {
+  return {
+    pane_id: paneId,
+    tab_id: `w1Z:t-${paneId}`,
+    workspace_id: "w1Z",
+    label: paneId,
+    agent: "doer",
+    kind: "pi",
+    agent_name: "doer",
+    status: "idle",
+  };
+}
+
+describe("registry serialization", () => {
+  it("does not lose concurrent adds to overlapping read-modify-write", async () => {
+    const { store, maxActive, entries } = yieldingStore();
+    const registry = new Registry(store, async () => null);
+
+    await Promise.all([
+      registry.add(makeRegistryEntry("w1Z:p1")),
+      registry.add(makeRegistryEntry("w1Z:p2")),
+      registry.add(makeRegistryEntry("w1Z:p3")),
+      registry.add(makeRegistryEntry("w1Z:p4")),
+    ]);
+
+    // Without serialization, each overlapping read sees the empty snapshot and
+    // the last writer clobbers the rest.
+    const ids = Object.keys(entries());
+    expect(ids).toHaveLength(4);
+    expect(ids).toEqual(
+      expect.arrayContaining(["w1Z:p1", "w1Z:p2", "w1Z:p3", "w1Z:p4"]),
+    );
+    // No two read-modify-write spans overlapped.
+    expect(maxActive()).toBe(1);
+  });
+
+  it("serializes setStatus against a concurrent add so neither update is lost", async () => {
+    const { store, maxActive, entries } = yieldingStore();
+    const registry = new Registry(store, async () => null);
+    await registry.add(makeRegistryEntry("w1Z:p1"));
+
+    await Promise.all([
+      registry.add(makeRegistryEntry("w1Z:p2")),
+      registry.setStatus("w1Z:p1", "done"),
+    ]);
+
+    const ids = Object.keys(entries()).sort();
+    expect(ids).toEqual(["w1Z:p1", "w1Z:p2"]);
+    expect(entries()["w1Z:p1"]!.status).toBe("done");
+    expect(maxActive()).toBe(1);
   });
 });

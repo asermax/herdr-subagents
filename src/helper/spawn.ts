@@ -204,8 +204,15 @@ async function verifyAndRename(
 ): Promise<void> {
   for (let attempt = 0; attempt < bounds.maxRenameAttempts; attempt++) {
     const snap = await client.agentGet(paneId);
-    if (snap && snap.name === expectedName) return;
-    // Name is missing or wrong — rename and re-verify (bounded).
+    // Detected and correctly named — done. `unknown` is not really detected
+    // yet, so it does not count as success here.
+    if (snap && snap.name === expectedName && snap.agent_status !== "unknown") return;
+    // Not detected (no agent, or status `unknown`): a freshly-started harness
+    // can briefly report this. Retry the read within the attempt budget — do
+    // NOT rename a pane with no detected agent (rename fails and closes the
+    // tab).
+    if (snap === null || snap.agent_status === "unknown") continue;
+    // Detected but the name is wrong — rename and re-verify (bounded).
     try {
       await client.agentRename(paneId, expectedName);
     } catch (e) {
