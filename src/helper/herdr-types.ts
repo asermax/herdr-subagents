@@ -1,6 +1,6 @@
-// herdr transport ports. The helper depends on these interfaces so tests can
-// inject a fake that records the sequence of calls — the sequence is what the
-// spec's acceptance criteria assert on.
+// The helper depends on these interfaces so tests can inject a fake that
+// records the sequence of calls — the sequence is what the spec's acceptance
+// criteria assert on.
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 export type TerminalStatus = "done" | "gone";

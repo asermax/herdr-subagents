@@ -115,7 +115,10 @@ export async function spawnChild(
     paneId = tab.pane_id;
     tabId = tab.tab_id;
   } catch (e) {
-    throw toFailure("tab-create", "could not create child tab", e);
+    throw {
+      reason: "tab-create",
+      message: `could not create child tab: ${e instanceof Error ? e.message : String(e)}`,
+    } satisfies SpawnFailure;
   }
 
   // Anything past here owns a half-created tab and must clean up on failure.
@@ -201,8 +204,15 @@ async function verifyAndRename(
 ): Promise<void> {
   for (let attempt = 0; attempt < bounds.maxRenameAttempts; attempt++) {
     const snap = await client.agentGet(paneId);
-    if (snap && snap.name === expectedName) return;
-    // Name is missing or wrong — rename and re-verify (bounded).
+    // Detected and correctly named — done. `unknown` is not really detected
+    // yet, so it does not count as success here.
+    if (snap && snap.name === expectedName && snap.agent_status !== "unknown") return;
+    // Not detected (no agent, or status `unknown`): a freshly-started harness
+    // can briefly report this. Retry the read within the attempt budget — do
+    // NOT rename a pane with no detected agent (rename fails and closes the
+    // tab).
+    if (snap === null || snap.agent_status === "unknown") continue;
+    // Detected but the name is wrong — rename and re-verify (bounded).
     try {
       await client.agentRename(paneId, expectedName);
     } catch (e) {
@@ -260,13 +270,7 @@ function waitForDelivery(
     });
 }
 
-function toFailure(reason: SpawnFailure["reason"], message: string, e: unknown): SpawnFailure {
-  const detail = e instanceof Error ? e.message : String(e);
-  const failure: SpawnFailure = { reason, message: `${message}: ${detail}` };
-  return failure;
-}
-
-function isSpawnFailure(value: unknown): value is SpawnFailure {
+export function isSpawnFailure(value: unknown): value is SpawnFailure {
   return (
     typeof value === "object" &&
     value !== null &&

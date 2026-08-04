@@ -6,7 +6,7 @@ import { collectChild, waitChild, type CollectDeps } from "./collect.js";
 import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
 import { fileRegistryStore, Registry } from "./registry.js";
-import { spawnChild, type SpawnResult } from "./spawn.js";
+import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
 import { runWatch } from "./watch.js";
 
 const KINDS = ["pi", "claude"] as const;
@@ -110,11 +110,11 @@ async function main(): Promise<void> {
     case "wait":
       return runWait(flags);
     case "collect":
-      return runCollect(flags);
+      return runCollect();
     case "list":
       return runList();
     case "close":
-      return runClose(flags);
+      return runClose();
     case "watch":
       return runWatch();
     default:
@@ -165,15 +165,15 @@ async function runSpawn(flags: Record<string, string>): Promise<void> {
   } catch (e) {
     emit(e);
     fail(
-      e && typeof e === "object" && "reason" in e
-        ? `spawn failed: ${(e as { message?: string }).message ?? "unknown"}`
+      isSpawnFailure(e)
+        ? `spawn failed: ${e.message}`
         : `spawn failed: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
 }
 
 async function runPrompt(flags: Record<string, string>): Promise<void> {
-  const paneId = restPositional(flags, process.argv.slice(2));
+  const paneId = restPositional(process.argv.slice(2));
   if (!paneId) fail("usage: helper prompt <pane_id> --body <text>", 2);
   const body = flags.body;
   if (body === undefined) fail("--body is required", 2);
@@ -184,7 +184,7 @@ async function runPrompt(flags: Record<string, string>): Promise<void> {
 }
 
 async function runWait(flags: Record<string, string>): Promise<void> {
-  const paneId = restPositional(flags, process.argv.slice(2));
+  const paneId = restPositional(process.argv.slice(2));
   if (!paneId) fail("usage: helper wait <pane_id>", 2);
   const { client } = buildDeps();
   const timeout = flags.timeout ? Number(flags.timeout) : 0;
@@ -193,8 +193,8 @@ async function runWait(flags: Record<string, string>): Promise<void> {
   emit({ pane_id: paneId, status: snap.agent_status });
 }
 
-async function runCollect(flags: Record<string, string>): Promise<void> {
-  const paneId = restPositional(flags, process.argv.slice(2));
+async function runCollect(): Promise<void> {
+  const paneId = restPositional(process.argv.slice(2));
   if (!paneId) fail("usage: helper collect <pane_id>", 2);
   const { client, registry } = buildDeps();
   const deps: CollectDeps = { client, registry };
@@ -207,8 +207,8 @@ async function runList(): Promise<void> {
   emit({ children });
 }
 
-async function runClose(flags: Record<string, string>): Promise<void> {
-  const tabId = restPositional(flags, process.argv.slice(2));
+async function runClose(): Promise<void> {
+  const tabId = restPositional(process.argv.slice(2));
   if (!tabId) fail("usage: helper close <tab_id>", 2);
   const { client, registry } = buildDeps();
   await client.tabClose(tabId);
@@ -221,7 +221,7 @@ async function runClose(flags: Record<string, string>): Promise<void> {
 
 // The positional argument is the first non-flag token after the subcommand.
 // parseArgs consumes flag values, so recover the positional from argv directly.
-function restPositional(_flags: Record<string, string>, argv: string[]): string | undefined {
+function restPositional(argv: string[]): string | undefined {
   const rest = argv.slice(2).filter((a) => !a.startsWith("--"));
   // The first positional is the subcommand; the second is our argument.
   return rest[1];

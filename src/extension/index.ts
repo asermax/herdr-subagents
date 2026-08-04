@@ -41,10 +41,9 @@ export const PROVIDER_READY = `${PKG}:provider-ready`;
 export const PROVIDER_READY_REQUEST = `${PKG}:provider-ready-request`;
 export const REGISTER = `${PKG}:register`;
 
-/** In-process handle for tests and sibling code (#22); pi ignores it. */
+/** In-process handle for tests and sibling code; pi ignores it. */
 export interface ExtensionHandle {
   registrar: Registrar;
-  /** True once a consumer announced presence on the bus. */
   herdrProviderReady(): boolean;
 }
 
@@ -53,7 +52,7 @@ export interface ExtensionHandle {
 // back to introspect bus state without reaching into the factory closure.
 let currentHandle: ExtensionHandle | undefined;
 
-/** Read back the handle for the active session (tests, #22). */
+/** Read back the handle for the active session. */
 export function getHandle(): ExtensionHandle | undefined {
   return currentHandle;
 }
@@ -85,7 +84,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   //   - PROVIDER (this extension): emits `provider-ready`; listens for
   //     `provider-ready-request`. On a request it sets its presence flag and
   //     re-emits `provider-ready` once.
-  //   - CONSUMER (`pi-cc-plugins`, ticket #23): emits `provider-ready-request`;
+  //   - CONSUMER (`pi-cc-plugins`): emits `provider-ready-request`;
   //     listens for `provider-ready`. On seeing ready it sets its own flag and
   //     re-emits its request once — this symmetric re-emit is REQUIRED, or a
   //     provider that loaded first never learns the consumer exists.
@@ -150,7 +149,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   };
   currentHandle = handle;
 
-  // Parent-side role (#22): spawn `helper watch`, forward changes into
+  // Parent-side role: spawn `helper watch`, forward changes into
   // TUI-only status cards, and wake on terminal-only states. Pushes its
   // teardown into the drain list so session_shutdown stops the watcher.
   unsubs.push(registerParentRole(pi));

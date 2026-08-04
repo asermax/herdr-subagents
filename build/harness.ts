@@ -10,7 +10,7 @@ export const PI_PACKAGE_NAME = "pi-herdr-subagents";
 export const PI_PACKAGE_SCOPE = "@asermax/pi-herdr-subagents";
 export const CLAUDE_PLUGIN_NAME = "herdr-subagents";
 
-/** The helper binary's name inside an artifact (shipped by #17). */
+/** The helper binary's name inside an artifact. */
 export const HELPER_BIN = "herdr-helper";
 
 /** Read the per-harness wake fragment that injects into {{wake}}. */

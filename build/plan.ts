@@ -24,16 +24,12 @@ export type EmitFile =
   // artifact so it can be spawned by absolute path (spec §3).
   | { dest: string; type: "bundle"; src: string };
 
-/** Relative path of the shared parent-facing protocol body in source. */
 const PROTOCOL = "shared/protocol.md";
 
-/** Relative path of the static child onboarding in source (token-free). */
 const ONBOARDING = "shared/onboarding.md";
 
-/** Relative path of the claude SessionStart onboarding hook (token-free). */
 const CLAUDE_ONBOARDING_HOOK = "claude/hooks/onboarding.sh";
 
-/** Relative path of the claude hooks config (token-free, exec form). */
 const CLAUDE_HOOKS_JSON = "claude/hooks/hooks.json";
 
 /**

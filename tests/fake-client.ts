@@ -35,6 +35,10 @@ export interface FakeOptions {
   // The state_change_seq to report on agentGet at each call index, to model
   // delivery advancing the sequence.
   seqByGetIndex?: (paneId: string, callIndex: number) => number | undefined;
+  // Per-get snapshot overrides keyed by pane: return a partial merged over the
+  // base, or undefined to use the base as-is. Models transient states (e.g. a
+  // freshly-started agent briefly reporting `unknown`).
+  snapshotByGetIndex?: Record<string, (callIndex: number) => Partial<AgentSnapshot> | undefined>;
   // tab counter for ids.
 }
 
@@ -95,7 +99,8 @@ export class FakeHerdrClient implements HerdrClient {
     const renameCount = this.renames[target] ?? 0;
     const nameFn = this.opts.nameAfterRename?.[target];
     const name = nameFn ? nameFn(renameCount) : base.name;
-    const snap: AgentSnapshot = { ...base, name };
+    const getOverride = this.opts.snapshotByGetIndex?.[target]?.(idx);
+    const snap: AgentSnapshot = { ...base, name, ...(getOverride ?? {}) };
     if (seqOverride !== undefined) snap.state_change_seq = seqOverride;
     return snap;
   }

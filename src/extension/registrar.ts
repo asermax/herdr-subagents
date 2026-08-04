@@ -259,6 +259,8 @@ function mergeByRank(bus: Map<string, Map<string, AgentRecord>>): AgentRecord[] 
     for (const agent of batch) {
       const key = qualifiedName(agent);
       const existing = byName.get(key);
+      // Higher rank wins; on equal rank the later batch overwrites, so the
+      // last-seen definition of a name lands.
       if (!existing || rankOf(agent) >= rankOf(existing)) {
         byName.set(key, agent);
       }

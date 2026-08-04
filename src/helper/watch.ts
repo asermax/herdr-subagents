@@ -17,7 +17,8 @@ import { HerdrError } from "./herdr-types.js";
 // We also subscribe to pane.created (workspace-wide) and, on a create event,
 // re-read the registry and subscribe to any new children. The registry is
 // still the source of truth for WHICH children are tracked — pane.created only
-// triggers a re-read.
+// triggers a re-read. pane.closed (also workspace-wide) drops a closed child
+// from the tracked set so events for it stop forwarding.
 
 export interface WatchLine {
   pane_id: string;
@@ -111,15 +112,16 @@ function subscribe(
 
     try {
       socket = createConnection(socketPath, async () => {
-        // Always subscribe to pane.created (workspace-wide) so children
-        // registered after watch starts are picked up. Plus the initial set.
+        // Always subscribe to pane.created/closed (workspace-wide) so children
+        // registered after watch starts are picked up and closed ones are
+        // dropped. Plus the initial set.
         const initial = await readPanes(deps);
         sendSubscribe(initial);
         socket?.write(
           JSON.stringify({
             id: `sub:${reqId++}`,
             method: "events.subscribe",
-            params: { subscriptions: [{ type: "pane.created" }] },
+            params: { subscriptions: [{ type: "pane.created" }, { type: "pane.closed" }] },
           }) + "\n",
         );
       });
@@ -158,6 +160,17 @@ function subscribe(
         if (env.result?.type === "subscription_started") continue;
         if (env.event === "pane.created") {
           void onPaneCreated();
+          continue;
+        }
+        if (env.event === "pane.closed") {
+          const closed = env.data?.pane_id;
+          if (closed) {
+            // Drop the closed child: stop forwarding its events. If its pane
+            // id is reused after a restart, pane.created re-reads the registry
+            // and re-subscribes under the new child's label.
+            subscribed.delete(closed);
+            labels.delete(closed);
+          }
           continue;
         }
         if (env.event !== "pane.agent_status_changed") continue;

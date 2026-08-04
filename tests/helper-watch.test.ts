@@ -192,6 +192,36 @@ describe("helper watch", () => {
     expect(emitted).toEqual(["w1Z:p1"]);
   });
 
+  it("stops forwarding a child after a pane.closed event", async () => {
+    seedRegistry([
+      {
+        pane_id: "w1Z:p1",
+        tab_id: "w1Z:t1",
+        workspace_id: "w1Z",
+        label: "tracked",
+        agent: "doer",
+        kind: "pi",
+        agent_name: "doer",
+        status: "idle",
+      },
+    ]);
+
+    // p1 streams working first; then pane.closed drops it; then a `done` for
+    // p1 must NOT be forwarded.
+    server.stream([{ paneId: "w1Z:p1", status: "working" }] as StreamedChange[]);
+    setTimeout(() => {
+      server.pushPaneClosed("w1Z:p1");
+      server.stream([{ paneId: "w1Z:p1", status: "done" }] as StreamedChange[]);
+    }, 200);
+
+    // collectLines: 2 so it waits for a second line that must never arrive;
+    // the timeout bounds the wait. Only `working` should be emitted.
+    const { lines } = await runWatch({ collectLines: 2, timeoutMs: 1000 });
+
+    const statuses = lines.map((l) => JSON.parse(l).status);
+    expect(statuses).toEqual(["working"]);
+  });
+
   it("fails fast when HERDR_SOCKET_PATH is unset", async () => {
     seedRegistry([]);
     const child = spawn("node", [BUILT, "watch"], {
