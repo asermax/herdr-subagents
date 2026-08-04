@@ -16,7 +16,6 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      - run: npm install-scripts approve esbuild
       - run: npm run typecheck
       - run: npm test
 
@@ -30,7 +29,6 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      - run: npm install-scripts approve esbuild
       - run: npm run build
       # Pack the pi package the way npm publish would, then install the tarball
       # globally into a clean npm prefix — the real install path (spec §9).
@@ -71,7 +69,6 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      - run: npm install-scripts approve esbuild
       - run: npm run build
       # Install the Claude CLI so `claude plugin validate` is available; fall
       # back to a structural check if it is not. The structural check is the
@@ -100,7 +97,6 @@ jobs:
           node-version-file: package.json
           cache: npm
       - run: npm ci
-      - run: npm install-scripts approve esbuild
       - run: npm run build
       # The claude-marketplace branch is an orphan holding only the built
       # plugin tree (spec §9): manifest, generated skill, hooks, marketplace
