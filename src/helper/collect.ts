@@ -141,26 +141,42 @@ async function readLastAssistantMessage(
   return undefined;
 }
 
-// pi session log: newline-delimited JSON. Entries have `type: "message"` with
-// `message.role` and `message.content[].text`. The last assistant message is
-// the last message entry whose role is assistant with a text block.
-function lastPiAssistant(text: string): string | undefined {
+type ParsedEntry = {
+  type?: string;
+  message?: { role?: string; stop_reason?: string | null; content?: unknown };
+};
+
+// Shared skeleton for the two transcript formats: newline-delimited JSON,
+// scanned newest-first for the first entry whose assistant text resolves.
+function lastAssistantMatching(
+  text: string,
+  match: (entry: ParsedEntry) => string | undefined,
+): string | undefined {
   const lines = text.split("\n").filter((l) => l.trim() !== "");
   for (let i = lines.length - 1; i >= 0; i--) {
-    let entry: { type?: string; message?: { role?: string; content?: unknown } };
     const line = lines[i];
     if (line === undefined) continue;
+    let entry: ParsedEntry;
     try {
       entry = JSON.parse(line);
     } catch {
       continue;
     }
-    if (entry.type === "message" && entry.message?.role === "assistant") {
-      const t = extractText(entry.message.content);
-      if (t !== undefined) return t;
-    }
+    const extracted = match(entry);
+    if (extracted !== undefined) return extracted;
   }
   return undefined;
+}
+
+// pi session log: newline-delimited JSON. Entries have `type: "message"` with
+// `message.role` and `message.content[].text`. The last assistant message is
+// the last message entry whose role is assistant with a text block.
+function lastPiAssistant(text: string): string | undefined {
+  return lastAssistantMatching(text, (entry) =>
+    entry.type === "message" && entry.message?.role === "assistant"
+      ? extractText(entry.message.content)
+      : undefined,
+  );
 }
 
 // claude transcript: newline-delimited JSON. Assistant entries have
@@ -168,30 +184,13 @@ function lastPiAssistant(text: string): string | undefined {
 // `stop_reason: null`). We require a complete assistant message — the lagging
 // async write can leave a mid-stream entry as the last line.
 function lastClaudeAssistant(text: string): string | undefined {
-  const lines = text.split("\n").filter((l) => l.trim() !== "");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let entry: {
-      type?: string;
-      message?: {
-        role?: string;
-        stop_reason?: string | null;
-        content?: unknown;
-      };
-    };
-    const line = lines[i];
-    if (line === undefined) continue;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.type !== "assistant" && entry.message?.role !== "assistant") continue;
+  return lastAssistantMatching(text, (entry) => {
+    // accept entries typed assistant OR role-tagged assistant (transcript variants)
+    if (entry.type !== "assistant" && entry.message?.role !== "assistant") return undefined;
     // A complete message has a non-null stop_reason. Mid-stream entries lag.
-    if (entry.message?.stop_reason === null) continue;
-    const t = extractText(entry.message?.content);
-    if (t !== undefined) return t;
-  }
-  return undefined;
+    if (entry.message?.stop_reason === null) return undefined;
+    return extractText(entry.message?.content);
+  });
 }
 
 function extractText(content: unknown): string | undefined {

@@ -115,7 +115,10 @@ export async function spawnChild(
     paneId = tab.pane_id;
     tabId = tab.tab_id;
   } catch (e) {
-    throw toFailure("tab-create", "could not create child tab", e);
+    throw {
+      reason: "tab-create",
+      message: `could not create child tab: ${e instanceof Error ? e.message : String(e)}`,
+    } satisfies SpawnFailure;
   }
 
   // Anything past here owns a half-created tab and must clean up on failure.
@@ -260,13 +263,7 @@ function waitForDelivery(
     });
 }
 
-function toFailure(reason: SpawnFailure["reason"], message: string, e: unknown): SpawnFailure {
-  const detail = e instanceof Error ? e.message : String(e);
-  const failure: SpawnFailure = { reason, message: `${message}: ${detail}` };
-  return failure;
-}
-
-function isSpawnFailure(value: unknown): value is SpawnFailure {
+export function isSpawnFailure(value: unknown): value is SpawnFailure {
   return (
     typeof value === "object" &&
     value !== null &&
