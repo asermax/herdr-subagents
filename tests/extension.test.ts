@@ -8,10 +8,10 @@ import { tmpdir } from "node:os";
 // bus subscriptions, then invoke the captured handlers directly — the shape
 // established by `@asermax/pi-cc-plugins`' `tests/extension.test.ts`.
 //
-// Covers the child-side onboarding injection (#20) and the agent-resolution
-// role (#21): the `--agent` flag, the registrar (precedence + field mapping +
+// Covers the child-side onboarding injection and the agent-resolution role:
+// the `--agent` flag, the registrar (precedence + field mapping +
 // replace-per-(source,namespace)), and the `pi.events` presence handshake. The
-// parent-side watcher (#22) registers into the same factory later.
+// parent-side watcher registers into the same factory later.
 
 import extension, { getHandle, PROVIDER_READY, PROVIDER_READY_REQUEST, REGISTER } from "../src/extension/index.js";
 
@@ -99,7 +99,7 @@ function createFakePi(): FakePi {
         if (handler) handler(data);
       }),
     },
-    // The parent-side role (#22) calls these at registration time. They are
+    // The parent-side role calls these at registration time. They are
     // pipe-fitting (spec Testing §"Not covered") and are NOT asserted here —
     // the fake pi only needs to provide them so the factory composes.
     registerEntryRenderer: vi.fn(),
@@ -341,7 +341,7 @@ describe("pi.events presence handshake", () => {
   // listener. The flag is correct by session start.
 
   /**
-   * Model the consumer side (pi-cc-plugins, #23): it subscribes to
+   * Model the consumer side (pi-cc-plugins): it subscribes to
    * provider-ready and emits provider-ready-request. When it sees
    * provider-ready it sets its own flag. Returns the flag so a test can assert
    * both sides converged regardless of load order.

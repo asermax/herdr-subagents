@@ -17,7 +17,7 @@ export interface RegistryEntry {
   agent: string;
   kind: "pi" | "claude";
   agent_name: string;
-  // Last status we observed. May be stale; `list` refreshes it.
+  // May be stale; `list` refreshes it.
   status: AgentStatus;
 }
 
