@@ -61,6 +61,11 @@ function subscribe(
   const write = deps.out ?? ((line: string) => process.stdout.write(line + "\n"));
   const labels = new Map<string, string>();
   const subscribed = new Set<string>();
+  // Pending agent.get probes: probe-id -> { paneId, label }. The
+  // status-change subscription emits only CHANGES, so on subscribe we probe
+  // each child's current status and emit it — otherwise a spawned child never
+  // reaches the footer until a change happens to fire (routinely missed).
+  const pendingProbes = new Map<string, { paneId: string; label: string }>();
   let socket: Socket | null = null;
   let buffer = "";
   let reqId = 0;
@@ -82,6 +87,16 @@ function subscribe(
       },
     });
     socket.write(request + "\n");
+    // Probe each child's current status: the subscription above emits only
+    // changes, so without this a newly subscribed child contributes nothing
+    // until its next transition (often missed entirely).
+    for (const p of panes) {
+      const id = `get:${reqId++}`;
+      pendingProbes.set(id, { paneId: p.paneId, label: p.label });
+      socket.write(
+        JSON.stringify({ id, method: "agent.get", params: { target: p.paneId } }) + "\n",
+      );
+    }
   };
 
   // On a pane.created event, re-read the registry and subscribe to any child
@@ -148,13 +163,26 @@ function subscribe(
         buffer = buffer.slice(nl + 1);
         if (line.trim() === "") continue;
         let env: {
-          result?: { type: string };
+          id?: string;
+          result?: { type: string; agent?: { agent_status?: string } };
           event?: string;
           data?: { pane_id?: string; agent_status?: string };
         };
         try {
           env = JSON.parse(line);
         } catch {
+          continue;
+        }
+        // An agent.get probe response: emit the child's current status so the
+        // footer seeds immediately on subscribe. Skip if the child was closed
+        // before the response landed (no longer tracked).
+        if (env.id && pendingProbes.has(env.id)) {
+          const { paneId, label } = pendingProbes.get(env.id)!;
+          pendingProbes.delete(env.id);
+          const status = env.result?.agent?.agent_status;
+          if (status && labels.has(paneId)) {
+            write(JSON.stringify({ pane_id: paneId, label, status }));
+          }
           continue;
         }
         if (env.result?.type === "subscription_started") continue;

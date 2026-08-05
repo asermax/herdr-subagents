@@ -55,6 +55,10 @@ export class StubHerdrServer {
   // or wait requests have targeted this pane. Drives `deliverOnAttempt`.
   private subAttempts: Record<string, number> = {};
   private waitAttempts: Record<string, number> = {};
+  // Per-pane current status returned to an `agent.get` probe. Only set
+  // explicitly; unset panes answer agent_not_found and so emit no probe line
+  // (keeps the change-only tests unchanged).
+  private currentStatuses: Record<string, string> = {};
   // Per-connection state: panes subscribed (pane-scoped keyed on pane_id,
   // pane.created keyed on the type), which scripted events it already received
   // (so a re-subscribe does not replay), and which queued stream changes it
@@ -72,6 +76,11 @@ export class StubHerdrServer {
 
   script(events: ScriptedEvent[]): void {
     this.events = events;
+  }
+
+  // Set the current status a `watch` probe (agent.get) reads for a pane.
+  setCurrentStatus(paneId: string, status: string): void {
+    this.currentStatuses[paneId] = status;
   }
 
   // Append changes to the stream queue. Each subscriber gets every change
@@ -266,6 +275,18 @@ export class StubHerdrServer {
     }
     if (req.method === "events.subscribe") {
       this.handleSubscribe(req, socket);
+      return;
+    }
+    if (req.method === "agent.get") {
+      const target = (req.params as { target?: string }).target ?? "";
+      const status = this.currentStatuses[target];
+      socket.write(
+        JSON.stringify(
+          status
+            ? { id: req.id, result: { type: "agent_info", agent: { agent_status: status } } }
+            : { id: req.id, error: { code: "agent_not_found", message: "no current status" } },
+        ) + "\n",
+      );
       return;
     }
     if (req.method !== "events.wait") return;

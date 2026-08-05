@@ -249,6 +249,34 @@ describe("helper watch", () => {
     const { lines } = await runWatch({ collectLines: 1, timeoutMs: 800 });
     expect(lines).toEqual([]);
   });
+
+  it("emits a child's current status on subscribe (agent.get probe), before any change", async () => {
+    seedRegistry([
+      {
+        pane_id: "w1Z:p1",
+        tab_id: "w1Z:t1",
+        workspace_id: "w1Z",
+        label: "doer",
+        agent: "doer",
+        kind: "pi",
+        agent_name: "doer",
+        status: "idle",
+      },
+    ]);
+    // The live status the probe reads. With no streamed change, the ONLY line
+    // must be this probe — the footer seeds on subscribe, not just on a later
+    // status change (which is routinely missed).
+    server.setCurrentStatus("w1Z:p1", "idle");
+
+    const { lines } = await runWatch({ collectLines: 1, timeoutMs: 1500 });
+
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toEqual({
+      pane_id: "w1Z:p1",
+      label: "doer",
+      status: "idle",
+    });
+  });
 });
 
 describe("helper watch mid-session children", () => {
