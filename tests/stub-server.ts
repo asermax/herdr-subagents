@@ -59,6 +59,9 @@ export class StubHerdrServer {
   // explicitly; unset panes answer agent_not_found and so emit no probe line
   // (keeps the change-only tests unchanged).
   private currentStatuses: Record<string, string> = {};
+  // Panes explicitly marked gone: agent.get answers agent_not_found (the
+  // stale-registry case that would make herdr reset a real connection).
+  private stalePanes = new Set<string>();
   // Per-connection state: panes subscribed (pane-scoped keyed on pane_id,
   // pane.created keyed on the type), which scripted events it already received
   // (so a re-subscribe does not replay), and which queued stream changes it
@@ -81,6 +84,12 @@ export class StubHerdrServer {
   // Set the current status a `watch` probe (agent.get) reads for a pane.
   setCurrentStatus(paneId: string, status: string): void {
     this.currentStatuses[paneId] = status;
+  }
+
+  // Mark a pane gone: agent.get answers agent_not_found for it (models a stale
+  // registry entry — a child closed outside `helper close`).
+  markStale(paneId: string): void {
+    this.stalePanes.add(paneId);
   }
 
   // Append changes to the stream queue. Each subscriber gets every change
@@ -279,13 +288,17 @@ export class StubHerdrServer {
     }
     if (req.method === "agent.get") {
       const target = (req.params as { target?: string }).target ?? "";
-      const status = this.currentStatuses[target];
+      if (this.stalePanes.has(target)) {
+        socket.write(
+          JSON.stringify({ id: req.id, error: { code: "agent_not_found", message: "stale pane" } }) + "\n",
+        );
+        return;
+      }
+      // Default to a live "idle" agent so registered children subscribe in
+      // tests (real herdr returns agent_info for a spawned child).
+      const status = this.currentStatuses[target] ?? "idle";
       socket.write(
-        JSON.stringify(
-          status
-            ? { id: req.id, result: { type: "agent_info", agent: { agent_status: status } } }
-            : { id: req.id, error: { code: "agent_not_found", message: "no current status" } },
-        ) + "\n",
+        JSON.stringify({ id: req.id, result: { type: "agent_info", agent: { agent_status: status } } }) + "\n",
       );
       return;
     }
