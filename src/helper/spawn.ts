@@ -37,7 +37,9 @@ export function childEnv(parentEnv: NodeJS.ProcessEnv = process.env): Record<str
 
 export interface SpawnInput {
   kind: "pi" | "claude";
-  agentName: string;
+  // Omitted for a generic spawn: the child runs the harness's default agent
+  // (default system prompt) plus the herdr onboarding, with no role.
+  agentName: string | undefined;
   label: string;
   // Parent's cwd — children live in the parent's workspace.
   cwd: string;
@@ -144,8 +146,11 @@ export async function spawnChild(
     }
 
     // 3. Verify the name landed; rename on evidence (bounded). This is the
-    //    2-of-4 case.
-    await verifyAndRename(client, paneId, input.agentName, bounds);
+    //    2-of-4 case. A generic spawn (no --agent) runs the harness default
+    //    agent, whose reported name never matches — skip the verify entirely.
+    if (input.agentName !== undefined) {
+      await verifyAndRename(client, paneId, input.agentName, bounds);
+    }
 
     // 4. Send the task prompt and verify delivery by watching for a status
     //    change or state-sequence advance within the stall window. No
@@ -174,12 +179,20 @@ async function startWithReadiness(
   bounds: SpawnBounds,
 ): Promise<ReadinessResult> {
   try {
+    // With --agent, name the child and pass --agent so it runs that role.
+    // Without, omit --agent so the child runs the harness default agent; the
+    // label is the tracking name herdr records (AgentStartParams.name is
+    // required).
+    const agentName = input.agentName;
+    const args = agentName !== undefined
+      ? ["--agent", agentName, ...(input.passThroughArgs ?? [])]
+      : [...(input.passThroughArgs ?? [])];
     const agent = await client.agentStart({
-      name: input.agentName,
+      name: agentName ?? input.label,
       kind: input.kind,
       paneId,
       timeoutMs: bounds.readinessTimeoutMs,
-      args: ["--agent", input.agentName, ...(input.passThroughArgs ?? [])],
+      args,
     });
     return { ok: true, agent };
   } catch (e) {

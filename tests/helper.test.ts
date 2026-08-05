@@ -138,6 +138,45 @@ describe("spawn dev-loop forwarding", () => {
   });
 });
 
+// --- spawn: generic (no --agent) ----------------------------------------
+// Omitting --agent dispatches a child running the harness default agent. The
+// child gets no --agent on its start argv (so it keeps the default prompt) and
+// no verify-and-rename (the default agent's reported name never matches).
+
+describe("spawn generic (no --agent)", () => {
+  it("omits --agent from agent-start args and uses the label as tracking name", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
+    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+
+    await spawnChild(
+      defaultSpawnInput({ agentName: undefined, passThroughArgs: ["--skill", "/repo/skills"] }),
+      { client, bounds: { deliveryStallMs: 1000 } },
+    );
+
+    const startCall = client.calls.find((c) => c.method === "agent.start")!;
+    // --agent is NOT prepended; only the forwarded args ride through.
+    expect(startCall.args.args).toEqual(["--skill", "/repo/skills"]);
+    expect(startCall.args.args).not.toContain("--agent");
+    // With no agent named, the label is the tracking name herdr records.
+    expect(startCall.args.name).toBe("do the thing");
+  });
+
+  it("skips verify-and-rename for a generic child", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
+    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+
+    await spawnChild(defaultSpawnInput({ agentName: undefined }), {
+      client,
+      bounds: { deliveryStallMs: 1000 },
+    });
+
+    const renames = client.calls.filter((c) => c.method === "agent.rename");
+    expect(renames).toHaveLength(0);
+  });
+});
+
 // --- spawn: verify-and-rename (2-of-4 case) -----------------------------
 
 describe("spawn verify-and-rename", () => {

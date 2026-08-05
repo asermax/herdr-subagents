@@ -107,9 +107,11 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   if (!isKind(kind)) fail(`--kind must be one of ${KINDS.join("|")}, got ${kind}`, 2);
 
   const agentName = args.agent;
-  if (!agentName) fail("--agent is required (a name, not a path)", 2);
-  // --agent takes a name, never a path.
-  if (agentName.includes("/")) fail(`--agent must be a name, not a path: ${agentName}`, 2);
+  // --agent is optional: omit it to dispatch a generic child running the
+  // harness default agent. When provided it takes a name, never a path.
+  if (agentName !== undefined && agentName.includes("/")) {
+    fail(`--agent must be a name, not a path: ${agentName}`, 2);
+  }
 
   const label = args.label;
   if (!label) fail("--label is required", 2);
@@ -129,9 +131,9 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
       tab_id: result.tab_id,
       workspace_id: workspaceId,
       label,
-      agent: agentName,
+      agent: agentName ?? label,
       kind,
-      agent_name: agentName,
+      agent_name: agentName ?? label,
       status: "idle",
     });
     emit(result);
