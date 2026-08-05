@@ -64,7 +64,6 @@ describe("resolveAgents — directory resolution + precedence", () => {
   });
 
   it("project .claude/agents overrides user .claude/agents for the same name", () => {
-    // Bare names: project overrides user (spec §7).
     const fakeHome = mkdtempSync(join(tmpdir(), "herdr-user-"));
     try {
       writeAgent(join(fakeHome, ".claude", "agents"), "reviewer.md", "name: reviewer\ndescription: user copy");
@@ -81,7 +80,6 @@ describe("resolveAgents — directory resolution + precedence", () => {
   });
 
   it("within a scope, .pi/agents overrides .claude/agents for the same name", () => {
-    // .pi/agents is the override knob; .claude/agents the shared default (§7).
     writeAgent(join(fx.root, ".claude", "agents"), "reviewer.md", "name: reviewer\ndescription: claude default");
     writeAgent(join(fx.root, ".pi", "agents"), "reviewer.md", "name: reviewer\ndescription: pi override");
 
@@ -109,8 +107,7 @@ describe("resolveAgents — directory resolution + precedence", () => {
   });
 
   it("warns on a duplicate name in the same directory and keeps the first", () => {
-    // Same name in the same directory: warn, first wins (spec §7). Resolution
-    // order within a dir is alphabetical by filename for determinism.
+    // Resolution order within a dir is alphabetical by filename for determinism.
     writeAgent(join(fx.root, ".claude", "agents"), "a-reviewer.md", "name: reviewer\ndescription: first file");
     writeAgent(join(fx.root, ".claude", "agents"), "b-reviewer.md", "name: reviewer\ndescription: second file");
 
@@ -215,7 +212,7 @@ describe("resolveAgents — field mapping", () => {
   it("captures the Markdown body below the frontmatter as the system prompt", () => {
     // The Claude format puts the system prompt in the file body, after the
     // frontmatter fence. parseAgentFile must carry it onto the record so the
-    // extension can append it at launch (spec §7).
+    // extension can append it at launch.
     writeAgent(
       join(fx.root, ".claude", "agents"),
       "reviewer.md",
@@ -245,8 +242,7 @@ describe("resolveAgents — field mapping", () => {
 
     const [agent] = resolveAgents({ cwd: fx.root }).agents;
 
-    // None of these survive onto the resolved record. (They are accepted by the
-    // parser and intentionally not carried — spec §7.)
+    // Accepted by the parser and intentionally not carried onto the record.
     expect(agent!).not.toHaveProperty("tools");
     expect(agent!).not.toHaveProperty("disallowedTools");
     expect(agent!).not.toHaveProperty("model");
@@ -274,7 +270,7 @@ describe("resolveAgents — field mapping", () => {
 
     const [agent] = resolveAgents({ cwd: fx.root }).agents;
 
-    // The Claude format has no toggles for these (spec §7), so they are fixed:
+    // The Claude format has no toggles for these, so they are fixed:
     // system prompt APPENDS (not Claude's replace), project context INHERITS,
     // skills INHERIT.
     expect(agent!.systemPromptMode).toBe("append");
@@ -284,7 +280,7 @@ describe("resolveAgents — field mapping", () => {
 
   it("a deliberately restricted agent (tools: limited) becomes unrestricted on pi", () => {
     // The tools drop means a restricted agent loses its restriction on pi.
-    // Accepted knowingly (spec §7). Asserted so the acceptance is visible.
+    // Accepted knowingly. Asserted so the acceptance is visible.
     writeAgent(
       join(fx.root, ".claude", "agents"),
       "reviewer.md",
@@ -327,8 +323,8 @@ describe("registrar — replace per (source, namespace)", () => {
 
   it("replaces per (source, namespace) — a second emit for the same key drops the first set", () => {
     // A session switch drops the previous project's agents and picks up the new
-    // ones with no staleness (spec §7). Registrations REPLACE per
-    // (source, namespace) rather than accumulating.
+    // ones with no staleness. Registrations REPLACE per (source, namespace)
+    // rather than accumulating.
     const fx = makeFixture();
     try {
       const pathV1 = writeAgent(join(fx.root, "v1", "agents"), "a.md", "name: alpha\ndescription: v1");
@@ -363,8 +359,8 @@ describe("registrar — replace per (source, namespace)", () => {
   });
 
   it("same qualified name under two sources: higher rank wins at lookup", () => {
-    // source maps onto the precedence rank (spec §8). When the same qualified
-    // name is registered under two sources, the higher-rank source wins.
+    // Source maps onto the precedence rank. When the same qualified name is
+    // registered under two sources, the higher-rank source wins.
     const fx = makeFixture();
     try {
       const pkgPath = writeAgent(join(fx.root, "pkg"), "r.md", "name: dup\ndescription: package copy");
@@ -410,7 +406,7 @@ describe("registrar — replace per (source, namespace)", () => {
       const registrar = createRegistrar();
       registrar.register({ version: 1, paths: [path], namespace: "my-plugin", source: "package" });
 
-      // Plugin-shipped agents are namespaced and require the prefix (spec §7).
+      // Plugin-shipped agents are namespaced and require the prefix.
       expect(registrar.resolve("researcher")).toBeUndefined();
       expect(registrar.resolve("my-plugin:researcher")?.description).toBe("plugin agent");
     } finally {

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { emitArtifact } from "../build/emit.ts";
 import { HELPER_BIN } from "../build/harness.ts";
 
-// Seam 1 (spec Testing): the onboarding hook is a process whose stdout and exit
+// Seam 1: the onboarding hook is a process whose stdout and exit
 // code are observable. Built into a real plugin tree and driven as a subprocess
 // — the same shape as tests/cli.test.ts. No live e2e, no build-output diff, no
 // skill-prose test.
@@ -46,7 +46,7 @@ describe("SessionStart onboarding hook — the gate (Seam 1)", () => {
     const { stdout, code } = await runHook({ HERDR_SUBAGENT: "1" });
     expect(code).toBe(0);
 
-    // The four onboarding topics (spec §6), and nothing else, ride stdout.
+    // The four onboarding topics, and nothing else, ride stdout.
     // 1. Identity: a parent spawned this session; a human can step in.
     expect(stdout).toMatch(/spawned as a subagent by a parent agent/);
     expect(stdout).toMatch(/human can also see your work/);

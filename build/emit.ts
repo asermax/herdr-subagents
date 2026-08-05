@@ -14,8 +14,8 @@ export function emitArtifact(harness: Harness, artifactRoot: string): void {
   const map = tokenMapFor(harness, artifactRoot);
   const sources = coverageSources(harness);
 
-  // Drift is prevented by construction (spec §9): assert coverage both ways
-  // before writing anything, so a mismatched map never reaches the output.
+  // Drift is prevented by construction: assert coverage both ways before
+  // writing anything, so a mismatched map never reaches the output.
   assertCoverage(sources, map);
 
   rmSync(artifactRoot, { recursive: true, force: true });

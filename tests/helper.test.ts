@@ -89,7 +89,7 @@ describe("spawn tab creation", () => {
   });
 });
 
-// --- spawn: dev-loop forwarding (spec §9) ------------------------------
+// --- spawn: dev-loop forwarding -----------------------------------------
 // A parent under development passes the same flags to its children; production
 // passes nothing. Env forwarding is always-on (HERDR_SUBAGENT_* prefix); argv
 // forwarding is the complement of spawn's own flags.

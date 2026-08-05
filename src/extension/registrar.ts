@@ -164,7 +164,6 @@ function parseAgentFile(path: string): ParsedFile | null {
   const { frontmatter, body } = parseFrontmatter(raw);
   const name = stringField(frontmatter, "name");
   const description = stringField(frontmatter, "description");
-  // Files require name and description (research §2.1, mirroring pi-subagents).
   if (!name || !description) return null;
 
   const record: Omit<AgentRecord, "source" | "namespace"> = {

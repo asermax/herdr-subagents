@@ -95,9 +95,8 @@ export function renderStatusLine(children: Map<string, ChildStatus>): string | u
 
 // One watch line → one status-line refresh, plus a wake on terminal-only
 // states. `gone` (detection lost) drops the child from the tracked set so the
-// summary shrinks; the wake still fires. Pipe-fitting (spec Testing
-// §"Not covered"): the spawn → line plumbing is exercised by the dev loop,
-// but this core is unit-tested directly.
+// summary shrinks; the wake still fires. Pipe-fitting: the spawn → line
+// plumbing is exercised by the dev loop, but this core is unit-tested directly.
 export function processLine(
   state: ParentRoleState,
   sink: StatusSink | undefined,
@@ -133,8 +132,8 @@ export function processLine(
   if (!TERMINAL.has(status)) return;
 
   // The wake — terminal state only, compact, no payload. triggerTurn wakes an
-  // idle parent; mid-turn it queues and lands at the turn boundary (research
-  // §1.6). Wake-then-collect: the parent collects deliberately.
+  // idle parent; mid-turn it queues and lands at the turn boundary.
+  // Wake-then-collect: the parent collects deliberately.
   sendWake(
     { customType: WAKE_TYPE, content: wakeContent(child), display: true },
     { triggerTurn: true },

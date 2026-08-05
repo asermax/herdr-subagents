@@ -8,9 +8,9 @@ import { coverageSources } from "../build/plan.ts";
 import { assertCoverage } from "../build/coverage.ts";
 
 /**
- * Not a build-output diff test (forbidden by spec Testing "Not tested"). This
- * asserts the token contract holds end to end: both tokens are declared and
- * consumed (coverage), and emit succeeds with every placeholder resolved.
+ * Not a build-output diff test. This asserts the token contract holds end to
+ * end: both tokens are declared and consumed (coverage), and emit succeeds
+ * with every placeholder resolved.
  */
 describe("build, both tokens", () => {
   it("declares and consumes both {{wake}} and {{helper}} for each harness", () => {

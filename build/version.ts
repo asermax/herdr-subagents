@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { repoRoot } from "./paths.ts";
 
 /**
- * The single version source (spec §9 drift-prevention gate).
+ * The single version source.
  *
  * Both shipped manifests — the pi package.json and the claude plugin.json —
  * read their version from here, which reads the repo-root VERSION file. Bump

@@ -3,7 +3,7 @@ import { resolve, join } from "node:path";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-// Seam 2 (spec Testing §Seam 2): the extension factory with a fake `pi`.
+// Seam 2: the extension factory with a fake `pi`.
 // We build a mock pi that captures event registrations, flags, and `pi.events`
 // bus subscriptions, then invoke the captured handlers directly — the shape
 // established by `@asermax/pi-cc-plugins`' `tests/extension.test.ts`.
@@ -60,8 +60,8 @@ interface FakePi {
  * Build a fake pi that captures lifecycle handler registrations, flag
  * registrations, and bus subscriptions. `getFlag` reads the reconciled CLI
  * value when one was seeded, else the registered default — mirroring pi's
- * `runtime.flagValues` flow (research §1.1: argv is reconciled against
- * registered flags, and `getFlag` reads the result).
+ * `runtime.flagValues` flow: argv is reconciled against registered flags, and
+ * `getFlag` reads the result.
  */
 function createFakePi(): FakePi {
   const handlers = new Map<string, CapturedHandler>();
@@ -75,7 +75,7 @@ function createFakePi(): FakePi {
     }),
     registerFlag: vi.fn((name: string, options: RegisteredFlag["options"]) => {
       flags.set(name, { options });
-      // pi seeds the registered default at load (research §1.1).
+      // pi seeds the registered default at load.
       if (options.default !== undefined) {
         flagValues.set(name, options.default);
       }
@@ -100,7 +100,7 @@ function createFakePi(): FakePi {
     // The parent-side role registers a session_start handler (captured in
     // `handlers`) to capture ctx.ui for the footer status line, and calls
     // sendMessage lazily on a terminal-state wake. sendMessage is
-    // pipe-fitting (spec Testing §"Not covered") and is NOT asserted here.
+    // pipe-fitting and is NOT asserted here.
     sendMessage: vi.fn(),
     handlers,
     busHandlers,
@@ -164,8 +164,8 @@ describe("extension factory", () => {
 describe("--agent flag", () => {
   // herdr launches a child as `herdr agent start --kind pi -- --agent <name>`;
   // the flag carries the agent name into the session. Same shape as pi's
-  // `--fff-mode` (research §1.1): a string flag with no default, registered
-  // declaratively so pi matches it against CLI argv — no process.argv parsing.
+  // `--fff-mode`: a string flag with no default, registered declaratively so
+  // pi matches it against CLI argv — no process.argv parsing.
   it("registers the agent flag as a string flag at factory time", () => {
     const pi = createFakePi();
     extension(pi as any);
@@ -174,8 +174,8 @@ describe("--agent flag", () => {
   });
 
   it("has no default — an unset flag reads undefined, not a sentinel", () => {
-    // research §1.1: `--fff-mode` registers `type: "string"` with no default,
-    // resolved as flag → env → default. The agent flag follows the same shape.
+    // `--fff-mode` registers `type: "string"` with no default, resolved as
+    // flag → env → default. The agent flag follows the same shape.
     const pi = createFakePi();
     extension(pi as any);
 
@@ -186,8 +186,8 @@ describe("--agent flag", () => {
 
   it("herdr's `-- --agent <name>` argv reaches pi.getFlag('agent')", () => {
     // Simulate pi's reconciliation: the `--agent reviewer` argv is reconciled
-    // against the registered flag and lands in flagValues (research §1.1).
-    // The extension reads it back through the same getFlag it registered.
+    // against the registered flag and lands in flagValues. The extension reads
+    // it back through the same getFlag it registered.
     const pi = createFakePi();
     extension(pi as any);
 
@@ -312,9 +312,9 @@ describe("before_agent_start onboarding injection", () => {
 });
 
 describe("before_agent_start: --agent consumption", () => {
-  // spec §7: a child launched as `herdr agent start --kind pi -- --agent <name>`
-  // must get the resolved agent's system prompt appended. The `--agent` flag is
-  // read back through pi.getFlag (research §1.1).
+  // A child launched as `herdr agent start --kind pi -- --agent <name>`
+  // must get the resolved agent's system prompt appended. The `--agent` flag
+  // is read back through pi.getFlag.
   const onboarding = readFileSync(ONBOARDING_PATH, "utf8");
 
   function beforeHandler(pi: FakePi): CapturedHandler {
@@ -413,9 +413,9 @@ describe("before_agent_start: --agent consumption", () => {
   });
 
   it("warns to stderr when a resolved agent declares unapplied spawn-time fields", async () => {
-    // thinking/turnBudget/skills cannot be applied from before_agent_start
-    // (spec §Out of Scope). The extension surfaces this as a one-line stderr
-    // warning rather than silently dropping the fields.
+    // thinking/turnBudget/skills cannot be applied from before_agent_start.
+    // The extension surfaces this as a one-line stderr warning rather than
+    // silently dropping the fields.
     const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       const pi = createFakePi();
@@ -509,10 +509,10 @@ describe("listener cleanup on shutdown", () => {
 });
 
 describe("pi.events presence handshake", () => {
-  // Eager emit-both-ways handshake (spec §8): both sides act at factory time,
-  // where load order is not guaranteed, so each emits its own signal AND
-  // listens for the other's. Whichever loads second triggers the first's
-  // listener. The flag is correct by session start.
+  // Eager emit-both-ways handshake: both sides act at factory time, where
+  // load order is not guaranteed, so each emits its own signal AND listens
+  // for the other's. Whichever loads second triggers the first's listener.
+  // The flag is correct by session start.
 
   /**
    * Model the consumer side (pi-cc-plugins): it subscribes to

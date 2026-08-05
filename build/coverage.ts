@@ -30,7 +30,7 @@ function placeholdersIn(text: string): Set<string> {
 }
 
 /**
- * Assert token coverage in both directions (spec §9):
+ * Assert token coverage in both directions:
  *  - every token the map defines is consumed somewhere in source (map -> source);
  *  - every placeholder in source is in the map (source -> map).
  *

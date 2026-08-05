@@ -21,7 +21,7 @@ export type EmitFile =
   | { dest: string; type: "generate"; render: (map: TokenMap) => string }
   // Bundle a TypeScript entry into a single self-contained ESM file with a
   // node shebang, marked executable. Used to ship the helper binary into an
-  // artifact so it can be spawned by absolute path (spec §3).
+  // artifact so it can be spawned by absolute path.
   | { dest: string; type: "bundle"; src: string };
 
 const PROTOCOL = "shared/protocol.md";
@@ -41,7 +41,7 @@ const CLAUDE_HOOKS_JSON = "claude/hooks/hooks.json";
  * claude: the plugin ships the delegate skill at `skills/delegate/SKILL.md`
  * (the path Claude auto-discovers), the onboarding the hook reads, the
  * `hooks/hooks.json` wiring, and the hook script itself. The manifest lives at
- * `.claude-plugin/plugin.json`, the path Claude reads on enable (spec §9).
+ * `.claude-plugin/plugin.json`, the path Claude reads on enable.
  */
 export function filePlan(harness: Harness): EmitFile[] {
   if (harness === "pi") {
@@ -61,7 +61,7 @@ export function filePlan(harness: Harness): EmitFile[] {
       { dest: "extension/registrar.ts", type: "copy", src: "extension/registrar.ts" },
       // The helper binary, bundled to a single executable at the package root
       // so the extension (and the {{helper}} token) can spawn it by absolute
-      // path (spec §3). herdr-helper resolves relative to the package root.
+      // path. herdr-helper resolves relative to the package root.
       { dest: "herdr-helper", type: "bundle", src: "helper/cli.ts" },
       { dest: "package.json", type: "generate", render: () => piManifest(readVersion()) },
     ];
@@ -83,7 +83,7 @@ export function filePlan(harness: Harness): EmitFile[] {
       type: "generate",
       render: () => claudeManifest(readVersion()),
     },
-    // The same tree doubles as a single-plugin marketplace (spec §9): the
+    // The same tree doubles as a single-plugin marketplace: the
     // orphan claude-marketplace branch holds this file at its root so
     // `claude plugin install --marketplace asermax/herdr-subagents` works.
     {
@@ -127,7 +127,7 @@ function piManifest(version: string): string {
           access: "public",
         },
         // The helper binary, invokable by absolute path from the extension and
-        // the {{helper}} skill token (spec §3).
+        // the {{helper}} skill token.
         bin: {
           "herdr-helper": "./herdr-helper",
         },
@@ -159,8 +159,8 @@ function claudeManifest(version: string): string {
         name: "herdr-subagents",
         version,
         description: "Delegate coding-agent work by spawning other agents as herdr tabs.",
-        // Hooks are discovered by convention at hooks/hooks.json (research
-        // §6) — plugin.json carries no hooks pointer.
+        // Hooks are discovered by convention at hooks/hooks.json — plugin.json
+        // carries no hooks pointer.
         author: { name: "Agustín Carrasco" },
         repository: "https://github.com/asermax/herdr-subagents",
         homepage: "https://github.com/asermax/herdr-subagents",

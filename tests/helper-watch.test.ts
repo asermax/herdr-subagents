@@ -1,4 +1,4 @@
-// Seam 1 (spec Testing §Seam 1): the `helper watch` subcommand, black-box.
+// Seam 1: the `helper watch` subcommand, black-box.
 //
 // `watch` is a long-lived stream: it subscribes to `pane.agent_status_changed`
 // for every registered child over the newline-delimited JSON-RPC socket and
@@ -312,8 +312,8 @@ describe("parent-role status line", () => {
   // Seam: processLine is the bridge between `helper watch` output and the
   // footer status line. It is driven directly with a fake sink (the captured
   // ctx.ui) and a fake wake sender — the spawn → line plumbing is
-  // pipe-fitting (spec Testing §"Not covered"). This is the consumer side of
-  // the watch stream; the describe blocks above cover the producer.
+  // pipe-fitting. This is the consumer side of the watch stream; the describe
+  // blocks above cover the producer.
 
   function setup() {
     const state = createParentRoleState();

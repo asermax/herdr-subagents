@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { childEnv } from "../src/helper/spawn.js";
 
-// The dev-loop env-forwarding contract (spec §9): the gate plus every
+// The dev-loop env-forwarding contract: the gate plus every
 // HERDR_SUBAGENT_* var the parent carries is always forwarded to children —
 // no dev/prod switch. herdr's own HERDR_* vars are NOT forwarded (different
 // owner), and the bare gate HERDR_SUBAGENT is always set.

@@ -69,8 +69,8 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
 
   // `--agent <name>` carries the child's agent name into the session. herdr
   // launches the child as `herdr agent start --kind pi -- --agent <name>`; the
-  // flag is registered declaratively so pi matches it against CLI argv (research
-  // §1.1). Same shape as pi's `--fff-mode`: a string flag with no default.
+  // flag is registered declaratively so pi matches it against CLI argv. Same
+  // shape as pi's `--fff-mode`: a string flag with no default.
   pi.registerFlag("agent", { type: "string" });
 
   const registrar = createRegistrar();
@@ -141,7 +141,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
     warnedUnapplied.add(key);
     process.stderr.write(
       `herdr-subagents: agent "${agent.name}" declares ${unapplied.join("/")}; ` +
-        `these are not applied on pi (spawn-time fields, need upstream pi support — spec §Out of Scope)\n`,
+        `these are not applied on pi (spawn-time fields, need upstream pi support)\n`,
     );
   }
 
@@ -157,7 +157,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
     // Agent-definition consumption: apply the resolved agent's
     // system prompt. Runs independently of onboarding — a
     // child can be launched with `--agent` but without HERDR_SUBAGENT. The
-    // `--agent` flag is registered declaratively above (research §1.1).
+    // `--agent` flag is registered declaratively above.
     const agentName = pi.getFlag("agent");
     if (typeof agentName === "string" && agentName.length > 0) {
       const agent = registrar.resolve(agentName);

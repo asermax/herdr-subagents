@@ -1,5 +1,5 @@
 /**
- * The token contract. Exactly two substitution tokens exist (spec §9).
+ * The token contract. Exactly two substitution tokens exist.
  *
  * `{{wake}}`   — content placeholder for the one model-visible divergence
  *                (pi auto-wakes; claude arms a background wait). Injected from

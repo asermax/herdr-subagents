@@ -5,7 +5,6 @@ import { srcDir } from "./paths.ts";
 
 export type Harness = "pi" | "claude";
 
-/** Names of the two shipped artifacts (spec §9). */
 export const PI_PACKAGE_NAME = "pi-herdr-subagents";
 export const PI_PACKAGE_SCOPE = "@asermax/pi-herdr-subagents";
 export const CLAUDE_PLUGIN_NAME = "herdr-subagents";
