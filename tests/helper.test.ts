@@ -132,7 +132,7 @@ describe("spawn dev-loop forwarding", () => {
 // no verify-and-rename (the default agent's reported name never matches).
 
 describe("spawn generic (no --agent)", () => {
-  it("omits --agent from agent-start args and uses the label as tracking name", async () => {
+  it("omits --agent from agent-start args and slugifies the label as the tracking name", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
     client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
 
@@ -145,8 +145,8 @@ describe("spawn generic (no --agent)", () => {
     // --agent is NOT prepended; only the forwarded args ride through.
     expect(startCall.args.args).toEqual(["--skill", "/repo/skills"]);
     expect(startCall.args.args).not.toContain("--agent");
-    // With no agent named, the label is the tracking name herdr records.
-    expect(startCall.args.name).toBe("do the thing");
+    // With no agent named, the label is slugified into a valid herdr name.
+    expect(startCall.args.name).toBe("do-the-thing");
   });
 
   it("skips verify-and-rename for a generic child", async () => {

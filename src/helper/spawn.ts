@@ -10,6 +10,19 @@ import { HerdrError } from "./herdr-types.js";
 
 const GATE = "HERDR_SUBAGENT";
 
+// herdr requires agent names matching [a-z][a-z0-9_-]{0,31}. When --agent is
+// omitted, the label is the only descriptive input — slugify it into a valid
+// name so a label like "delegation test" becomes "delegation-test".
+export function slugifyAgentName(label: string): string {
+  let slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^[^a-z]+/, "")
+    .replace(/^-+|-+$/g, "");
+  if (slug.length > 32) slug = slug.slice(0, 32).replace(/-+$/, "");
+  return slug || "agent";
+}
+
 // The prefix for child-facing env the parent forwards down (dev loop).
 // The gate itself is the bare HERDR_SUBAGENT; related signals use this prefix
 // so they ride the same always-shared channel (ADR-0003 named the convention).
@@ -178,7 +191,7 @@ async function startWithReadiness(
       ? ["--agent", agentName, ...(input.passThroughArgs ?? [])]
       : [...(input.passThroughArgs ?? [])];
     const agent = await client.agentStart({
-      name: agentName ?? input.label,
+      name: agentName ?? slugifyAgentName(input.label),
       kind: input.kind,
       paneId,
       timeoutMs: bounds.readinessTimeoutMs,

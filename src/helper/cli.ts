@@ -8,7 +8,7 @@ import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
 import { DEFAULT_PROMPT_BOUNDS, deliverPrompt } from "./prompt.js";
 import { fileRegistryStore, Registry } from "./registry.js";
-import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
+import { isSpawnFailure, spawnChild, slugifyAgentName, type SpawnResult } from "./spawn.js";
 import { runWatch } from "./watch.js";
 
 const KINDS = ["pi", "claude"] as const;
@@ -125,14 +125,15 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
       { kind, agentName, label, cwd, workspaceId, passThroughArgs: passthroughArgs(rawArgs) },
       { client },
     );
+    const effectiveAgent = agentName ?? slugifyAgentName(label);
     await registry.add({
       pane_id: result.pane_id,
       tab_id: result.tab_id,
       workspace_id: workspaceId,
       label,
-      agent: agentName ?? label,
+      agent: effectiveAgent,
       kind,
-      agent_name: agentName ?? label,
+      agent_name: effectiveAgent,
       status: "idle",
     });
     emit(result);
