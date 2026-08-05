@@ -5,8 +5,8 @@ import { repoRoot } from "./paths.ts";
  * The single version source.
  *
  * Both shipped manifests — the pi package.json and the claude plugin.json —
- * read their version from here, which reads the repo-root VERSION file. Bump
- * one file; both artifacts and the root package.json move together.
+ * read their version from here. The release pipeline bumps this file and
+ * rebuilds, so both artifacts share one version.
  */
 export function readVersion(): string {
   const raw = readFileSync(`${repoRoot}/VERSION`, "utf8").trim();

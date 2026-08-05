@@ -83,36 +83,32 @@ jobs:
           # tag --dry-run checks plugin.json and the marketplace entry agree.
           cd build/out/claude && claude plugin tag --dry-run .
 
-  marketplace:
-    name: Regenerate claude-marketplace branch
+  release:
+    name: Release (version → build → publish pi + claude)
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [test, install, validate-plugin]
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
+      # npm trusted publishing (OIDC) — same as @asermax/pi-cc-plugins.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version-file: package.json
           cache: npm
       - run: npm ci
+      # Build once so build/out/pi exists for the npm plugin's verifyConditions.
+      # semantic-release bumps VERSION and rebuilds again in its prepare step,
+      # so both the pi package and the claude orphan branch ship at the
+      # released version from a single build (see .releaserc.json).
       - run: npm run build
-      # The claude-marketplace branch is an orphan holding only the built
-      # plugin tree (spec §9): manifest, generated skill, hooks, marketplace
-      # manifest. Regenerated and force-pushed on every push to main.
-      - name: Publish orphan claude-marketplace branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          REMOTE="https://${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          # Create the orphan branch fresh from the built output each time.
-          git checkout --orphan claude-marketplace
-          git rm -rf --quiet .
-          # Copy the built plugin tree to the branch root.
-          cp -r build/out/claude/. .
-          git add -A
-          git commit -m "chore(marketplace): regenerate @ ${GITHUB_SHA::7}"
-          git push "$REMOTE" HEAD:claude-marketplace --force
+      - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "false"

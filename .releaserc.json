@@ -1,0 +1,32 @@
+{
+  "branches": ["main"],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/changelog",
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "printf %s \"${nextRelease.version}\" > VERSION && npm run build"
+      }
+    ],
+    [
+      "@semantic-release/npm",
+      { "pkgRoot": "build/out/pi" }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "publishCmd": "bash scripts/publish-marketplace.sh ${nextRelease.version}"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["VERSION", "CHANGELOG.md"],
+        "message": "chore(release): ${nextRelease.version} [skip ci]"
+      }
+    ],
+    "@semantic-release/github"
+  ]
+}
