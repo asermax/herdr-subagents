@@ -1,83 +1,78 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "../src/helper/cli";
+import { passthroughArgs } from "../src/helper/cli";
 
-// parseArgs must accept values that start with `--` for value-bearing flags.
-// Without that, `helper spawn --label "--refactor" ...` drops the label value
-// and reads the flag as `true`. Bare flags still default to `true`.
+// passthroughArgs scans the spawn subcommand's rawArgs (already post-
+// subcommand) and forwards every `--flag value` pair spawn does not consume
+// itself. citty cannot round-trip unknown flag pairs, so passthrough is built
+// from rawArgs, never from parsed args.
 
-describe("parseArgs value-bearing flags", () => {
-  it("preserves a --label value that starts with --", () => {
-    const flags = parseArgs([
-      "spawn",
-      "--kind", "pi",
-      "--agent", "doer",
-      "--label", "--refactor",
-      "--body", "<supervisor-agent>x</supervisor-agent>",
+describe("passthroughArgs forwards unknown flags", () => {
+  it("forwards an unknown --flag value pair verbatim", () => {
+    const out = passthroughArgs(["--extension", "/repo/src/extension/index.ts"]);
+    expect(out).toEqual(["--extension", "/repo/src/extension/index.ts"]);
+  });
+
+  it("forwards multiple unknown pairs in order", () => {
+    const out = passthroughArgs([
+      "--extension", "/repo/ext",
+      "--skill", "/repo/skills",
     ]);
-    expect(flags.label).toBe("--refactor");
-    expect(flags.kind).toBe("pi");
-    expect(flags.agent).toBe("doer");
-    expect(flags.body).toBe("<supervisor-agent>x</supervisor-agent>");
+    expect(out).toEqual(["--extension", "/repo/ext", "--skill", "/repo/skills"]);
   });
 
-  it("preserves a --body value that itself starts with --", () => {
-    const flags = parseArgs([
-      "spawn",
-      "--kind", "claude",
-      "--agent", "doer",
-      "--label", "x",
-      "--body", "--weird-prefix content",
-    ]);
-    expect(flags.body).toBe("--weird-prefix content");
-  });
-
-  it("preserves a --agent value that starts with --", () => {
-    const flags = parseArgs(["--agent", "--name", "--label", "x"]);
-    expect(flags.agent).toBe("--name");
-  });
-
-  it("preserves --timeout value that starts with -- (e.g. a negative-ish token)", () => {
-    const flags = parseArgs(["w1Z:p1", "--timeout", "--5000"]);
-    expect(flags.timeout).toBe("--5000");
-  });
-
-  it("treats every value-bearing flag the same: consumes next token regardless of leading --", () => {
-    for (const key of ["kind", "agent", "label", "body", "cwd", "workspace", "timeout"]) {
-      const flags = parseArgs([`--${key}`, "--value"]);
-      expect(flags[key]).toBe("--value");
-    }
+  it("forwards a bare unknown flag (no value) as-is", () => {
+    const out = passthroughArgs(["--verbose"]);
+    expect(out).toEqual(["--verbose"]);
   });
 });
 
-describe("parseArgs bare and unknown flags", () => {
-  it("defaults a bare value-bearing flag (no following token) to true", () => {
-    const flags = parseArgs(["--label"]);
-    expect(flags.label).toBe("true");
+describe("passthroughArgs skips spawn's own flags", () => {
+  it("drops each own flag and its value", () => {
+    const out = passthroughArgs([
+      "--kind", "pi",
+      "--agent", "doer",
+      "--label", "do it",
+      "--body", "x",
+      "--cwd", "/repo",
+      "--workspace", "w1Z",
+    ]);
+    expect(out).toEqual([]);
   });
 
-  it("defaults a bare boolean flag to true", () => {
-    const flags = parseArgs(["--focus"]);
-    expect(flags.focus).toBe("true");
+  it("drops own flags but keeps the surrounding forwarded flags", () => {
+    const out = passthroughArgs([
+      "--kind", "pi",
+      "--agent", "doer",
+      "--label", "do it",
+      "--extension", "/repo/ext",
+      "--skill", "/repo/skills",
+    ]);
+    expect(out).toEqual(["--extension", "/repo/ext", "--skill", "/repo/skills"]);
   });
 
-  it("consumes a non--- value for an unknown flag", () => {
-    const flags = parseArgs(["--unknown", "value"]);
-    expect(flags.unknown).toBe("value");
+  it("drops a bare own flag (no following value)", () => {
+    const out = passthroughArgs(["--kind", "--extension", "x"]);
+    // --kind is own and its next token --extension starts with --, so the
+    // value is not consumed; --extension then forwards with its own value.
+    expect(out).toEqual(["--extension", "x"]);
   });
+});
 
-  it("treats a bare -- separator as a no-op (does not eat the next token)", () => {
-    // A standalone `--` is the conventional separator: it is not a flag and
-    // must not consume the following token. Here --focus reads as true and
-    // --label still gets its value.
-    const flags = parseArgs(["--focus", "--", "--label", "x"]);
-    expect(flags.focus).toBe("true");
-    expect(flags.label).toBe("x");
-    expect(flags[""]).toBeUndefined();
+describe("passthroughArgs separators and value shapes", () => {
+  it("skips a bare -- separator without consuming the next token", () => {
+    const out = passthroughArgs(["--", "--extension", "x"]);
+    expect(out).toEqual(["--extension", "x"]);
   });
 
   it("ignores positional (non-flag) tokens", () => {
-    const flags = parseArgs(["w1Z:p1", "--label", "x", "extra"]);
-    expect(flags.label).toBe("x");
-    expect(flags["w1Z:p1"]).toBeUndefined();
+    const out = passthroughArgs(["w1Z:p1", "--extension", "x", "extra"]);
+    expect(out).toEqual(["--extension", "x"]);
+  });
+
+  it("keeps a -- value attached to an unknown flag (two bare flags)", () => {
+    // An unknown flag whose next token starts with -- is not consumed as a
+    // value; both forward as separate flags, matching the prior parser.
+    const out = passthroughArgs(["--weird", "--value"]);
+    expect(out).toEqual(["--weird", "--value"]);
   });
 });

@@ -2,6 +2,7 @@
 // The helper — the complete interface to delegation, invoked over bash. The
 // only herdr socket client in the system. The pi extension does NOT get one.
 
+import { defineCommand, runMain } from "citty";
 import { collectChild, waitChild, type CollectDeps } from "./collect.js";
 import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
@@ -16,64 +17,41 @@ function isKind(v: string): v is Kind {
   return (KINDS as readonly string[]).includes(v);
 }
 
-export function parseArgs(argv: string[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === undefined || !a.startsWith("--")) continue;
-    // A bare `--` is the conventional separator, not a flag. Skip it without
-    // treating the following token as its value.
-    if (a === "--") continue;
-    const key = a.slice(2);
-    const next = argv[i + 1];
-    // Value-bearing flags consume the next token unconditionally — even when
-    // it starts with `--` (e.g. --label "--refactor"). Without this, a
-    // `--`-prefixed value is silently dropped and the flag reads as `true`.
-    if (VALUE_FLAGS.has(key) && next !== undefined) {
-      out[key] = next;
-      i++;
-    } else if (next !== undefined && !next.startsWith("--")) {
-      out[key] = next;
-      i++;
-    } else {
-      out[key] = "true";
-    }
-  }
-  return out;
-}
-
-// Flags that take a value (vs. bare boolean flags). A value-bearing flag
-// consumes the next token as its value regardless of a leading `--`, so a
-// label or body like "--refactor" is preserved instead of eaten.
-const VALUE_FLAGS = new Set(["kind", "agent", "label", "body", "cwd", "workspace", "timeout"]);
-
 // Flags `spawn` claims for itself. Anything else on the parent's argv forwards
-// to the child's harness (a parent under development passes the same
-// flags to its children; production passes nothing). Not an allowlist — the
-// complement of our own surface, so future flags forward by default.
+// to the child's harness (a parent under development passes the same flags to
+// its children; production passes nothing). Not an allowlist — the complement
+// of our own surface, so future flags forward by default.
 const SPAWN_OWN_FLAGS = new Set(["kind", "agent", "label", "body", "cwd", "workspace"]);
+
+const SUBCOMMANDS = new Set(["spawn", "prompt", "wait", "collect", "list", "close", "watch"]);
+const USAGE = "usage: helper <spawn|prompt|wait|collect|list|close|watch> [options]";
 
 /**
  * Extract the argv slice to forward to a spawned child: every `--flag value`
- * pair after the `spawn` subcommand that `spawn` does not consume itself.
- * Re-emits them in their original `--flag value` / `--flag` form.
+ * pair from the spawn subcommand's rawArgs that spawn does not consume itself.
+ * Re-emits them in their original `--flag value` / `--flag` form. A bare `--`
+ * separator is skipped without consuming the next token.
+ *
+ * Scans the subcommand's `rawArgs` (already post-subcommand) — NOT citty's
+ * parsed args. citty cannot round-trip an unknown `--flag value` pair: the
+ * flag reads as `true` and the value detaches into `args._`. rawArgs keeps the
+ * exact tokens and pairing, so passthrough is built from it.
  */
-function passthroughArgs(argv: string[]): string[] {
-  // Drop the subcommand (argv[0] after slice(2)).
-  const rest = argv.slice(3);
+export function passthroughArgs(rawArgs: string[]): string[] {
   const out: string[] = [];
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i];
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
     if (a === undefined || !a.startsWith("--")) continue;
+    if (a === "--") continue;
     const key = a.slice(2);
     if (SPAWN_OWN_FLAGS.has(key)) {
       // Skip the value too if it is a non-flag token.
-      const next = rest[i + 1];
+      const next = rawArgs[i + 1];
       if (next !== undefined && !next.startsWith("--")) i++;
       continue;
     }
     out.push(a);
-    const next = rest[i + 1];
+    const next = rawArgs[i + 1];
     if (next !== undefined && !next.startsWith("--")) {
       out.push(next);
       i++;
@@ -98,57 +76,52 @@ function buildDeps() {
   return { client, registry };
 }
 
-async function main(): Promise<void> {
-  const [subcommand, ...rest] = process.argv.slice(2);
-  const flags = parseArgs(rest);
-
-  switch (subcommand) {
-    case "spawn":
-      return runSpawn(flags);
-    case "prompt":
-      return runPrompt(flags);
-    case "wait":
-      return runWait(flags);
-    case "collect":
-      return runCollect();
-    case "list":
-      return runList();
-    case "close":
-      return runClose();
-    case "watch":
-      return runWatch();
-    default:
-      fail(
-        `unknown subcommand ${subcommand ?? "(none)"}\n` +
-          "usage: helper <spawn|prompt|wait|collect|list|close|watch> [options]",
-        2,
-      );
+// Surface a thrown error as a single-line stderr message, matching the
+// original top-level catch. citty's runMain dumps the full error object;
+// validation paths call fail() directly and never reach here.
+async function runCatching(p: Promise<void>): Promise<void> {
+  try {
+    await p;
+  } catch (e) {
+    if (e instanceof HerdrError) fail(e.message);
+    fail(e instanceof Error ? e.message : String(e));
   }
 }
 
-async function runSpawn(flags: Record<string, string>): Promise<void> {
+// --- subcommand bodies --------------------------------------------------
+
+interface SpawnArgs {
+  kind: string | undefined;
+  agent: string | undefined;
+  label: string | undefined;
+  body: string;
+  cwd: string;
+  workspace: string | undefined;
+}
+
+async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   // --kind is required and restricted to exactly pi|claude. Anything else is
   // rejected BEFORE reaching herdr.
-  const kind = flags.kind;
+  const kind = args.kind;
   if (!kind) fail("--kind is required (pi|claude)", 2);
   if (!isKind(kind)) fail(`--kind must be one of ${KINDS.join("|")}, got ${kind}`, 2);
 
-  const agentName = flags.agent;
+  const agentName = args.agent;
   if (!agentName) fail("--agent is required (a name, not a path)", 2);
   // --agent takes a name, never a path.
   if (agentName.includes("/")) fail(`--agent must be a name, not a path: ${agentName}`, 2);
 
-  const label = flags.label;
+  const label = args.label;
   if (!label) fail("--label is required", 2);
 
-  const body = flags.body ?? "";
-  const cwd = flags.cwd ?? process.cwd();
-  const workspaceId = flags.workspace ?? currentWorkspaceId();
+  const body = args.body;
+  const cwd = args.cwd;
+  const workspaceId = args.workspace ?? currentWorkspaceId();
 
   const { client, registry } = buildDeps();
   try {
     const result: SpawnResult = await spawnChild(
-      { kind, agentName, label, cwd, workspaceId, body, passThroughArgs: passthroughArgs(process.argv) },
+      { kind, agentName, label, cwd, workspaceId, body, passThroughArgs: passthroughArgs(rawArgs) },
       { client },
     );
     await registry.add({
@@ -172,10 +145,15 @@ async function runSpawn(flags: Record<string, string>): Promise<void> {
   }
 }
 
-async function runPrompt(flags: Record<string, string>): Promise<void> {
-  const paneId = restPositional(process.argv.slice(2));
+interface PromptArgs {
+  paneId: string | undefined;
+  body: string | undefined;
+}
+
+async function runPrompt(args: PromptArgs): Promise<void> {
+  const paneId = args.paneId;
   if (!paneId) fail("usage: helper prompt <pane_id> --body <text>", 2);
-  const body = flags.body;
+  const body = args.body;
   if (body === undefined) fail("--body is required", 2);
   const { client } = buildDeps();
   // The body arrives already wrapped in <supervisor-agent> by the caller.
@@ -183,18 +161,27 @@ async function runPrompt(flags: Record<string, string>): Promise<void> {
   emit({ pane_id: paneId, sent: true });
 }
 
-async function runWait(flags: Record<string, string>): Promise<void> {
-  const paneId = restPositional(process.argv.slice(2));
+interface WaitArgs {
+  paneId: string | undefined;
+  timeout: string | undefined;
+}
+
+async function runWait(args: WaitArgs): Promise<void> {
+  const paneId = args.paneId;
   if (!paneId) fail("usage: helper wait <pane_id>", 2);
   const { client } = buildDeps();
-  const timeout = flags.timeout ? Number(flags.timeout) : 0;
+  const timeout = args.timeout ? Number(args.timeout) : 0;
   // wait returns on terminal state (done|gone), NOT on blocked.
   const snap = await waitChild(paneId, client, timeout);
   emit({ pane_id: paneId, status: snap.agent_status });
 }
 
-async function runCollect(): Promise<void> {
-  const paneId = restPositional(process.argv.slice(2));
+interface CollectArgs {
+  paneId: string | undefined;
+}
+
+async function runCollect(args: CollectArgs): Promise<void> {
+  const paneId = args.paneId;
   if (!paneId) fail("usage: helper collect <pane_id>", 2);
   const { client, registry } = buildDeps();
   const deps: CollectDeps = { client, registry };
@@ -207,8 +194,12 @@ async function runList(): Promise<void> {
   emit({ children });
 }
 
-async function runClose(): Promise<void> {
-  const tabId = restPositional(process.argv.slice(2));
+interface CloseArgs {
+  tabId: string | undefined;
+}
+
+async function runClose(args: CloseArgs): Promise<void> {
+  const tabId = args.tabId;
   if (!tabId) fail("usage: helper close <tab_id>", 2);
   const { client, registry } = buildDeps();
   await client.tabClose(tabId);
@@ -219,20 +210,74 @@ async function runClose(): Promise<void> {
   emit({ tab_id: tabId, closed: true });
 }
 
-// The positional argument is the first non-flag token after the subcommand.
-// Callers pass process.argv.slice(2), so argv[0] is already the subcommand;
-// parseArgs consumes flag values, so recover the positional from argv directly.
-function restPositional(argv: string[]): string | undefined {
-  const rest = argv.filter((a) => !a.startsWith("--"));
-  // The first positional is the subcommand; the second is our argument.
-  return rest[1];
-}
+// --- commands -----------------------------------------------------------
+
+const spawn = defineCommand({
+  args: {
+    kind: { type: "string", description: "Harness kind (pi|claude)" },
+    agent: { type: "string", description: "Agent name (not a path)" },
+    label: { type: "string", description: "Tab label" },
+    body: { type: "string", default: "", description: "Task prompt body" },
+    cwd: { type: "string", default: process.cwd(), description: "Child working directory" },
+    workspace: { type: "string", description: "Workspace id" },
+  },
+  run: ({ args, rawArgs }) => runCatching(runSpawn(args, rawArgs)),
+});
+
+const prompt = defineCommand({
+  args: {
+    // required:false so a missing id reaches our own usage guard (exact
+    // message + exit 2) instead of citty's default error.
+    paneId: { type: "positional", required: false, description: "Pane id" },
+    body: { type: "string", description: "Prompt body" },
+  },
+  run: ({ args }) => runCatching(runPrompt(args)),
+});
+
+const wait = defineCommand({
+  args: {
+    paneId: { type: "positional", required: false, description: "Pane id" },
+    timeout: { type: "string", description: "Timeout in ms" },
+  },
+  run: ({ args }) => runCatching(runWait(args)),
+});
+
+const collect = defineCommand({
+  args: {
+    paneId: { type: "positional", required: false, description: "Pane id" },
+  },
+  run: ({ args }) => runCatching(runCollect(args)),
+});
+
+const list = defineCommand({
+  args: {},
+  run: () => runCatching(runList()),
+});
+
+const close = defineCommand({
+  args: {
+    tabId: { type: "positional", required: false, description: "Tab id" },
+  },
+  run: ({ args }) => runCatching(runClose(args)),
+});
+
+const watch = defineCommand({
+  args: {},
+  run: () => runCatching(runWatch()),
+});
+
+const main = defineCommand({
+  subCommands: { spawn, prompt, wait, collect, list, close, watch },
+});
 
 // Run only when invoked as the entrypoint — importing the module (for unit
-// tests of parseArgs) must not trigger the CLI.
+// tests of passthroughArgs) must not trigger the CLI. The subcommand token is
+// validated here so the none/unknown cases keep the exact usage message and
+// exit code 2; runMain then dispatches the known subcommand.
 if (import.meta.main) {
-  main().catch((e) => {
-    if (e instanceof HerdrError) fail(e.message);
-    fail(e instanceof Error ? e.message : String(e));
-  });
+  const token = process.argv.slice(2)[0];
+  if (!SUBCOMMANDS.has(token ?? "")) {
+    fail(`unknown subcommand ${token ?? "(none)"}\n${USAGE}`, 2);
+  }
+  runMain(main);
 }

@@ -102,6 +102,22 @@ describe("CLI --kind rejection", () => {
   });
 });
 
+describe("CLI value-bearing --label", () => {
+  it("accepts a --label value that starts with -- (parse passes validation)", async () => {
+    // The old parser let a value-bearing flag take a value that starts with
+    // --. citty must too: if it dropped the value, --label would read as
+    // missing and fail with exit 2 "--label is required". Instead the parse
+    // succeeds and the command reaches the socket check (exit 1).
+    const { code, stderr } = await runCli(
+      ["spawn", "--kind", "pi", "--agent", "doer", "--label", "--refactor", "--body", "x"],
+      { HERDR_SOCKET_PATH: "" },
+    );
+    expect(code).toBe(1);
+    expect(stderr).not.toMatch(/--label is required/);
+    expect(stderr).toMatch(/HERDR_SOCKET_PATH/);
+  });
+});
+
 describe("CLI help surface", () => {
   it("lists the six subcommands in the usage error", async () => {
     const { stderr } = await runCli([]);
