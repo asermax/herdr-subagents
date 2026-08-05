@@ -26,6 +26,11 @@ export const WAKE_TYPE = "herdr-subagents:wake";
 // Terminal states wake; blocked never does.
 const TERMINAL = new Set(["done", "gone"]);
 
+// Statuses that drop a child from the live widget. `gone` (detection lost)
+// and `closed` (the parent ran `helper close`) both shrink the summary; only
+// `gone` wakes (it is terminal) — `closed` is deliberate and stays silent.
+const REMOVED = new Set(["gone", "closed"]);
+
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 // The helper binary ships at the package root (build/plan.ts emits
@@ -95,9 +100,10 @@ export function renderStatusLine(children: Map<string, ChildStatus>): string[] |
 }
 
 // One watch line → one status-line refresh, plus a wake on terminal-only
-// states. `gone` (detection lost) drops the child from the tracked set so the
-// summary shrinks; the wake still fires. Pipe-fitting: the spawn → line
-// plumbing is exercised by the dev loop, but this core is unit-tested directly.
+// states. `gone` (detection lost) and `closed` (the parent ran `helper close`)
+// drop the child from the tracked set so the summary shrinks; only `gone`
+// wakes — `closed` is deliberate. Pipe-fitting: the spawn → line plumbing is
+// exercised by the dev loop, but this core is unit-tested directly.
 export function processLine(
   state: ParentRoleState,
   sink: StatusSink | undefined,
@@ -122,7 +128,7 @@ export function processLine(
     status,
   };
 
-  if (status === "gone") {
+  if (REMOVED.has(status)) {
     state.children.delete(rec.pane_id);
   } else {
     state.children.set(rec.pane_id, child);

@@ -143,9 +143,11 @@ describe("helper watch (pollOnce)", () => {
     expect(lines.map((l) => JSON.parse(l).status)).toEqual(["gone"]);
   });
 
-  it("does NOT emit gone when the parent removed the child from the registry", async () => {
-    // helper close removes the child from the registry. The watch should drop
-    // it silently — the parent already knows, so a gone wake would be noise.
+  it("emits closed (not gone) when the parent removed the child from the registry", async () => {
+    // helper close removes the child from the registry. The watch emits
+    // `closed` so the widget can drop it, but the consumer must not wake —
+    // the parent closed it deliberately. `gone` stays reserved for an
+    // unexpected loss (probe failed while still tracked).
     seedRegistry([entry("w1Z:p1", "cleaner")]);
     server.setCurrentStatus("w1Z:p1", "working");
     const { last } = await poll();
@@ -153,7 +155,7 @@ describe("helper watch (pollOnce)", () => {
     seedRegistry([]); // parent closed + pruned the child
     const { lines } = await poll(last);
 
-    expect(lines).toEqual([]);
+    expect(lines.map((l) => JSON.parse(l).status)).toEqual(["closed"]);
   });
 
   it("skips a stale registry entry (no emit, no crash)", async () => {
@@ -297,6 +299,17 @@ describe("parent-role status line", () => {
       expect.objectContaining({ customType: WAKE_TYPE }),
       { triggerTurn: true },
     );
+  });
+
+  it("drops a closed child from the widget without waking", () => {
+    const { state, sink, sendWake, setWidget } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "done", "reviewer"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "closed", "reviewer"));
+
+    // The widget empties (the only child left), but no extra wake fires —
+    // only the earlier done wake, never one for closed.
+    expect(setWidget).toHaveBeenLastCalledWith(STATUS_KEY, undefined);
+    expect(sendWake).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT wake on a non-terminal status (working/blocked/idle)", () => {

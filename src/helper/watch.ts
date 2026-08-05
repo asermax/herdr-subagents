@@ -102,16 +102,17 @@ export async function pollOnce(
     if (status) live.set(p.paneId, { label: p.label, status });
   }
 
-  // A tracked child that is no longer live emits `gone` once — BUT only if it
-  // is still tracked in the registry. A child removed from the registry
-  // (the parent ran `helper close`) drops silently: the parent already knows,
-  // so a `gone` wake would be noise. A child still in the registry whose probe
-  // failed (crashed, herdr restart renumbered panes) still emits `gone`.
+  // A previously-live child that is no longer live left the fleet this
+  // cycle. Two causes, distinguished by whether it is still in the registry:
+  //   - still tracked, but the probe failed (crashed, or herdr renumbered
+  //     panes on restart) → `gone`: unexpected, so the consumer wakes.
+  //   - removed from the registry (the parent ran `helper close`) → `closed`:
+  //     deliberate, so the consumer drops it from the widget WITHOUT waking.
   const trackedIds = new Set(panes.map((p) => p.paneId));
   for (const [paneId, info] of last) {
-    if (!live.has(paneId) && trackedIds.has(paneId)) {
-      write(JSON.stringify({ pane_id: paneId, label: info.label, status: "gone" }));
-    }
+    if (live.has(paneId)) continue;
+    const status = trackedIds.has(paneId) ? "gone" : "closed";
+    write(JSON.stringify({ pane_id: paneId, label: info.label, status }));
   }
   // New or changed statuses only — repeating a stable status would re-wake the
   // parent every cycle while a child sits terminal.
