@@ -11,8 +11,8 @@ config tree under `/home/agus/.claude/` (agents, hooks, plugins, settings), and
 official Anthropic docs. The docs URL
 `https://docs.claude.com/en/docs/claude-code/<page>` 301-redirects to the
 canonical `https://code.claude.com/docs/en/<page>`; this doc cites the canonical
-form. Where the installed `plugin-dev` skill doc and the live docs disagree, the
-live docs win and the disagreement is called out.
+form. The live docs are authoritative; where a secondary source disagrees,
+the live docs win.
 
 Two claims were verified empirically against the installed binary rather than
 trusted from docs; they are marked **verified** below.
@@ -63,12 +63,12 @@ agents are the built-ins plus plugin agents. This was confirmed directly:
 ```
 $ claude -p --agent nonexistent-agent-xyz "hi"
 --agent 'nonexistent-agent-xyz' not found. Available agents: claude, Explore,
-general-purpose, Plan, statusline-setup, superpowers:documentation-searcher
+general-purpose, Plan, ..., <plugin-name>:<agent-name>
 ```
 
 The "Available agents" line shows built-ins and **plugin-scoped names**
-(`superpowers:documentation-searcher`), confirming plugin agents are reached via
-`<plugin-name>:<agent-name>`.
+(`<plugin-name>:<agent-name>`), confirming plugin agents are reached via that
+scoped form.
 
 ### Interaction with other flags
 
@@ -112,8 +112,7 @@ the default agent).
 
 ### Canonical frontmatter schema
 
-The **authoritative source is the live sub-agents doc**, not the bundled
-`plugin-dev` skill (which is partially outdated — see "Discrepancies" below).
+The **authoritative source is the live sub-agents doc**.
 A file is YAML frontmatter followed by a Markdown body. The body **is** the
 system prompt.
 
@@ -168,21 +167,6 @@ agent as a project/user file instead. (This matters for our design: a
 plugin-shipped child agent cannot carry its own hooks, so any report-handoff hook
 must live in the plugin's `hooks/hooks.json` or in user/project settings.)
 
-Real example, excerpted from the installed `filadd-dev` plugin agent
-`/home/agus/.claude/plugins/cache/filadd-marketplace/filadd-dev/2.73.4/agents/repo-scout.md`:
-
-```markdown
----
-name: repo-scout
-description: REQUIRED — Load the `filadd-dev:code-search` skill before dispatching this agent. ...
-tools: Read, Grep, Glob, Bash(ls:*), Bash(tree:*), ..., Skill(filadd-dev:dev-standards)
-model: sonnet
----
-
-# Repo Scout Agent
-You are a specialized code exploration agent ...
-```
-
 ### `--agents` (JSON, session-only)
 
 You can define agents for a single session without any file via `--agents`. The
@@ -194,10 +178,6 @@ claude --agents '{"reviewer": {"description": "Reviews code", "prompt": "You are
 
 Accepts the same fields as file frontmatter. Useful for automation and tests.
 
-### Discrepancies between sources
-
-The bundled `plugin-dev` skill (`/home/agus/.claude/plugins/cache/claude-plugins-official/plugin-dev/unknown/skills/agent-development/SKILL.md`) is **partially outdated**. It claims frontmatter is `name`, `description`, `model`, `color`, `tools` only, with color options `blue/cyan/green/yellow/magenta/red`. The live docs add `disallowedTools`, `permissionMode`, `maxTurns`, `skills`, `mcpServers`, `hooks`, `memory`, `background`, `effort`, `isolation`, `initialPrompt`, and use color options `red/blue/green/yellow/purple/orange/pink/cyan` (no `magenta`). **Pin the schema on the live docs table above.**
-
 ---
 
 ## 3. Hooks — `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`
@@ -207,8 +187,7 @@ The bundled `plugin-dev` skill (`/home/agus/.claude/plugins/cache/claude-plugins
 Hooks come from six sources (official "Hook locations" table): `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, managed policy settings, a **plugin's `hooks/hooks.json`**, or skill/agent frontmatter. A plugin's hooks **merge** with user and project hooks and run in parallel with them.
 
 A plugin ships hooks as a JSON file (conventionally `hooks/hooks.json`) with a
-top-level `description` (optional) wrapping a `hooks` object. Real example, the
-installed `n8n-mcp-skills` plugin:
+top-level `description` (optional) wrapping a `hooks` object. For example:
 
 ```json
 {
@@ -216,10 +195,6 @@ installed `n8n-mcp-skills` plugin:
     "SessionStart": [
       { "matcher": "startup|resume|clear|compact",
         "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh" } ] }
-    ],
-    "PreToolUse": [
-      { "matcher": "^mcp__.*__get_node$",
-        "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use/get-node.sh" } ] }
     ]
   }
 }
@@ -230,27 +205,17 @@ installed `n8n-mcp-skills` plugin:
 in both shell form and exec form (exec form with `args` is preferred for paths).
 
 User `settings.json` uses the same nesting but **without** the `description`
-wrapper. The existing herdr wiring in `~/.claude/settings.json` registers
-`SessionStart` through `SubagentStop` against the herdr-managed script:
+wrapper; hooks there merge with plugin hooks and run in parallel.
 
-```json
-"hooks": {
-  "SessionStart": [{ "matcher": "*", "hooks": [{ "type": "command",
-      "command": "bash '/home/agus/.claude/hooks/herdr-agent-state.sh' session", "timeout": 10 }] }],
-  "Stop":     [{ "hooks": [{ "type": "command", "command": "...claude-hook.sh ..." }] }],
-  "SubagentStop": [{ "hooks": [{ "type": "command", "command": "...claude-hook.sh ..." }] }]
-}
-```
+### Hook payloads
 
-### The existing herdr hook, read as a payload reference
-
-`/home/agus/.claude/hooks/herdr-agent-state.sh` reads these fields off stdin:
-`hook_event_name`, `agent_id`, `session_id`, `transcript_path`, `source`. That
-tells us the real payload exposes all of them. It also deliberately **ignores
-`SubagentStop`** ("Claude recap/away-summary can emit it after the main turn has
-already stopped"), and only acts on `SessionStart` to report
-`agent_session_id` + `agent_session_path` to the herdr unix socket. It does
-**not** read the final assistant message — it relies on the transcript path.
+A `SessionStart` payload exposes these fields on stdin: `hook_event_name`,
+`agent_id`, `session_id`, `transcript_path`, `source`. A registration hook can
+forward `session_id` + `transcript_path` out-of-band to the parent (e.g. over a
+unix socket). Note that recap/away-summary can emit `SubagentStop` after the
+main turn has already stopped, so do not use it to revive an idle pane;
+`SessionStart` does not carry the final assistant message (the transcript path
+does).
 
 ### `Stop` hook — does it reach the final assistant message?
 
@@ -307,8 +272,7 @@ Fires when a session begins or resumes. Matcher is the start reason:
 SessionStart is special: anything written to **stdout** is injected into
 Claude's context, and it can persist env vars by writing `export VAR=...` lines
 to the `$CLAUDE_ENV_FILE` path. `model` may be present (not guaranteed). This is
-the natural place for a plugin to register a child's session id with the parent,
-which is exactly how the existing herdr integration uses it.
+the natural place for a plugin to register a child's session id with the parent.
 
 ### `SessionEnd`
 
@@ -417,9 +381,8 @@ open and carries only the event, not the full message text. To get a child's
 report into a parent the way a finished job arrives, either (i) use synchronous
 `Agent`-tool delegation (the result returns as a tool_result — recommended), or
 (ii) have the child's `Stop` hook (which **does** carry `last_assistant_message`,
-see §3) deliver the report out-of-band to the parent (e.g. write to a file or
-socket the parent reads), mimicking what the existing herdr `SessionStart` hook
-already does for session ids.
+see §3) deliver the report out-of-band to the parent (e.g. write to a file or socket
+the parent reads).
 
 ---
 
@@ -454,13 +417,13 @@ Unrecognized top-level fields are **ignored** (so a manifest can double as a
 `package.json`/VS Code extension manifest); `claude plugin validate --strict`
 turns those warnings into errors for CI.
 
-Minimal manifest (real, from the official `plugin-dev` plugin):
+Minimal manifest:
 
 ```json
 {
-  "name": "plugin-dev",
-  "description": "Plugin development toolkit with skills for creating agents, commands, hooks, MCP integrations, and comprehensive plugin structure guidance",
-  "author": { "name": "Anthropic", "email": "support@anthropic.com" }
+  "name": "herdr-subagents",
+  "description": "Delegate coding-agent work by spawning other agents as herdr tabs.",
+  "author": { "name": "Author Name" }
 }
 ```
 
@@ -552,8 +515,8 @@ A few things constrain a skill whose body is produced from a shared source
   `.claude/agents/`) and pi, and is the shared contract.
 - **Child report handoff**: the `Stop` hook delivers the child's final message
   inline as `last_assistant_message` (**verified**) — no transcript parsing
-  needed. The existing herdr `SessionStart` hook already registers session ids;
-  a sibling `Stop` hook can ship the report the same way. Alternatively, use
+  needed. A `SessionStart` hook can register a child's session id; a sibling
+  `Stop` hook can ship the report the same way. Alternatively, use
   synchronous `Agent`-tool delegation and the report returns as the tool result.
 - **Plugin packaging**: ship `.claude-plugin/plugin.json` + `agents/` +
   `hooks/hooks.json` + `skills/`. For a generated skill, materialize it into the
