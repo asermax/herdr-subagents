@@ -143,6 +143,19 @@ describe("helper watch (pollOnce)", () => {
     expect(lines.map((l) => JSON.parse(l).status)).toEqual(["gone"]);
   });
 
+  it("does NOT emit gone when the parent removed the child from the registry", async () => {
+    // helper close removes the child from the registry. The watch should drop
+    // it silently — the parent already knows, so a gone wake would be noise.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "working");
+    const { last } = await poll();
+
+    seedRegistry([]); // parent closed + pruned the child
+    const { lines } = await poll(last);
+
+    expect(lines).toEqual([]);
+  });
+
   it("skips a stale registry entry (no emit, no crash)", async () => {
     seedRegistry([entry("w1Z:p1", "closed-long-ago")]);
     server.markStale("w1Z:p1");
