@@ -51,7 +51,7 @@ jobs:
           test -f "$pkg_root/extension/registrar.ts"
           test -f "$pkg_root/extension/parent-role.ts"
           test -f "$pkg_root/skills/delegate.md"
-          test -f "$pkg_root/skills/onboarding.md"
+          test -f "$pkg_root/references/onboarding.md"
           # The static skill registration is present in the manifest.
           node -e "const m=require('$pkg_root/package.json'); \
             if(!m.pi||!m.pi.skills||!m.pi.skills.includes('./skills')) process.exit(1); \
