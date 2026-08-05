@@ -14,7 +14,7 @@ import { HerdrError } from "./herdr-types.js";
 
 const GATE = "HERDR_SUBAGENT";
 
-// The prefix for child-facing env the parent forwards down (spec §9 dev loop).
+// The prefix for child-facing env the parent forwards down (dev loop).
 // The gate itself is the bare HERDR_SUBAGENT; related signals use this prefix
 // so they ride the same always-shared channel (ADR-0003 named the convention).
 // herdr's own vars use the HERDR_* prefix; this one is ours.

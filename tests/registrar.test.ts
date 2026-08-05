@@ -11,8 +11,7 @@ import { tmpdir } from "node:os";
 //
 // Canonical Claude frontmatter fields (research claude-code-surface.md):
 //   name, description (required); tools, disallowedTools, model, effort,
-//   maxTurns, skills, mcpServers, hooks, memory, background, isolation, color,
-//   initialPrompt (optional).
+//   maxTurns, skills, mcpServers, hooks, memory, background, isolation, color.
 
 import { createRegistrar, resolveAgents } from "../src/extension/registrar.js";
 
@@ -211,18 +210,6 @@ describe("resolveAgents — field mapping", () => {
     const [agent] = resolveAgents({ cwd: fx.root }).agents;
 
     expect(agent!.skills).toEqual(["code-review", "tdd"]);
-  });
-
-  it("maps initialPrompt to an injected first user turn", () => {
-    writeAgent(
-      join(fx.root, ".claude", "agents"),
-      "reviewer.md",
-      "name: reviewer\ndescription: x\ninitialPrompt: Start by reading the diff.",
-    );
-
-    const [agent] = resolveAgents({ cwd: fx.root }).agents;
-
-    expect(agent!.initialPrompt).toBe("Start by reading the diff.");
   });
 
   it("captures the Markdown body below the frontmatter as the system prompt", () => {

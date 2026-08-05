@@ -5,10 +5,10 @@ import { HerdrError } from "./herdr-types.js";
 
 // `watch`: a long-lived stream of status changes for every registered child,
 // one line of JSON per change. Speaks herdr's socket directly — agent state is
-// push, not polled, and there is no CLI for it (spec §3, §5).
+// push, not polled, and there is no CLI for it.
 //
-// Reads the registry to know which children to watch. This is the link the
-// spec's §5 calls out: the model spawns over bash, so the extension never sees
+// Reads the registry to know which children to watch. This is the link:
+// the model spawns over bash, so the extension never sees
 // the call — `helper watch` (reading the registry) is what the extension
 // forwards, and the helper stays the only herdr socket client.
 //

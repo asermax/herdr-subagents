@@ -35,8 +35,8 @@ const CLAUDE_HOOKS_JSON = "claude/hooks/hooks.json";
 /**
  * The file plan for a harness artifact.
  *
- * pi: the package `skills/` dir holds the delegate body and onboarding; the
- * extension registers the skill via the package manifest.
+ * pi: the package `skills/` dir holds the delegate body; onboarding ships in
+ * `references/`. The extension registers the skill via the package manifest.
  *
  * claude: the plugin ships the delegate skill at `skills/delegate/SKILL.md`
  * (the path Claude auto-discovers), the onboarding the hook reads, the
@@ -47,7 +47,7 @@ export function filePlan(harness: Harness): EmitFile[] {
   if (harness === "pi") {
     return [
       { dest: "skills/delegate.md", type: "substitute", src: PROTOCOL },
-      { dest: "skills/onboarding.md", type: "copy", src: ONBOARDING },
+      { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
       // The extension ships as source .ts that pi loads via its tsx loader
       // (matches @asermax/pi-cc-plugins' shape). Token-free, copied verbatim.
       { dest: "extension/index.ts", type: "copy", src: "extension/index.ts" },
@@ -69,7 +69,7 @@ export function filePlan(harness: Harness): EmitFile[] {
       // for a generated skill). The body is the shared protocol, substituted.
       render: (map) => claudeDelegateSkill(map),
     },
-    { dest: "skills/onboarding.md", type: "copy", src: ONBOARDING },
+    { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
     { dest: "hooks/hooks.json", type: "copy", src: CLAUDE_HOOKS_JSON },
     { dest: "hooks/onboarding.sh", type: "copy", src: CLAUDE_ONBOARDING_HOOK },
     {
@@ -126,7 +126,7 @@ function piManifest(version: string): string {
           "herdr-helper": "./herdr-helper",
         },
         // Extension source + the helper binary ship in the tarball.
-        files: ["skills/", "extension/", "herdr-helper"],
+        files: ["skills/", "references/", "extension/", "herdr-helper"],
         pi: {
           extensions: ["./extension/index.ts"],
           skills: ["./skills"],

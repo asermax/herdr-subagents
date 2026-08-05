@@ -8,15 +8,15 @@ import type { Component } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 
 // Parent-side role of the herdr-subagents pi extension. Owns ONLY the bridge
-// between `helper watch` and the parent session (spec §5, §9):
+// between `helper watch` and the parent session:
 //   - spawns `helper watch` once per session
 //   - forwards each change as a TUI-only status card (pi.appendEntry)
 //   - on a terminal state (done|gone) forwards a compact wake (pi.sendMessage
 //     with triggerTurn); blocked NEVER wakes
 //
 // The extension holds NO herdr socket client and does NO extraction — it is a
-// thin bridge, and all herdr knowledge stays single-sourced in the helper
-// (spec §3). The wake carries no payload: wake-then-collect (spec §5, §11).
+// thin bridge, and all herdr knowledge stays single-sourced in the helper.
+// The wake carries no payload: wake-then-collect.
 // No coalescing — native delivery semantics already prevent a burst from
 // derailing a turn.
 
@@ -27,7 +27,7 @@ const WAKE_TYPE = "herdr-subagents:wake";
 // Terminal states wake; blocked never does.
 const TERMINAL = new Set(["done", "gone"]);
 
-const here = dirname(fileURLToPath(import.meta.url));
+const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 // The helper binary ships at the package root (build/plan.ts emits
 // `herdr-helper` there). The dev loop overrides with HERDR_SUBAGENT_HELPER
@@ -36,7 +36,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export function helperPath(): string {
   const override = process.env.HERDR_SUBAGENT_HELPER;
   if (override) return override;
-  return join(packageRoot(here), "herdr-helper");
+  return join(packageRoot(moduleDir), "herdr-helper");
 }
 
 // Walk up from `start` to the nearest directory holding a package.json — the
@@ -89,7 +89,7 @@ export function registerParentRole(pi: ExtensionAPI): () => void {
       child = spawnWatch();
     } catch {
       // A spawn failure must not crash the session. The wake's durable
-      // backstop is `helper list` (spec §5) — the parent never loses a child.
+      // backstop is `helper list` — the parent never loses a child.
       child = null;
       return;
     }

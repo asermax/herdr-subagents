@@ -306,8 +306,8 @@ describe("before_agent_start onboarding injection", () => {
 
 describe("before_agent_start: --agent consumption", () => {
   // spec §7: a child launched as `herdr agent start --kind pi -- --agent <name>`
-  // must get the resolved agent's system prompt appended and its initialPrompt
-  // injected. The `--agent` flag is read back through pi.getFlag (research §1.1).
+  // must get the resolved agent's system prompt appended. The `--agent` flag is
+  // read back through pi.getFlag (research §1.1).
   const onboarding = readFileSync(ONBOARDING_PATH, "utf8");
 
   function beforeHandler(pi: FakePi): CapturedHandler {
@@ -348,26 +348,6 @@ describe("before_agent_start: --agent consumption", () => {
       const result = await fire(pi);
 
       expect(result.systemPrompt).toBe("BASE\n\nYou review code thoroughly.");
-    } finally {
-      restore();
-    }
-  });
-
-  it("injects a resolved agent's initialPrompt as the first user turn", async () => {
-    const restore = withEnv({ HERDR_SUBAGENT: undefined });
-    try {
-      const pi = createFakePi();
-      extension(pi as any);
-      registerAgent(pi, "reviewer.md", "name: reviewer\ndescription: digs\ninitialPrompt: Read the diff first.");
-      pi.flagValues.set("agent", "reviewer");
-
-      const result = await fire(pi);
-
-      expect(result.message).toEqual({
-        customType: "herdr-subagents:initial-prompt",
-        content: "Read the diff first.",
-        display: false,
-      });
     } finally {
       restore();
     }

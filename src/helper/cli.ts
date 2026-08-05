@@ -48,7 +48,7 @@ export function parseArgs(argv: string[]): Record<string, string> {
 const VALUE_FLAGS = new Set(["kind", "agent", "label", "body", "cwd", "workspace", "timeout"]);
 
 // Flags `spawn` claims for itself. Anything else on the parent's argv forwards
-// to the child's harness (spec §9: a parent under development passes the same
+// to the child's harness (a parent under development passes the same
 // flags to its children; production passes nothing). Not an allowlist — the
 // complement of our own surface, so future flags forward by default.
 const SPAWN_OWN_FLAGS = new Set(["kind", "agent", "label", "body", "cwd", "workspace"]);

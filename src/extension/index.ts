@@ -6,12 +6,12 @@ import { createRegistrar, type Registrar, type RegisterPayload, type AgentRecord
 import { registerParentRole } from "./parent-role.js";
 
 // herdr-subagents pi extension. This slice owns the agent-resolution role
-// (spec §7/§8): the `--agent` flag, the registrar that resolves
+// — the `--agent` flag, the registrar that resolves
 // `.claude/agents/*.md`, and the `pi.events` presence handshake. The child-side
-// onboarding injection (spec §6) lives here too. No herdr socket client lives
-// here — the helper is the only one (spec §3).
+// onboarding injection lives here too. No herdr socket client lives
+// here — the helper is the only one.
 
-const here = dirname(fileURLToPath(import.meta.url));
+const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 /** Append `extra` to `base`, collapsing to `extra` when the base is empty. */
 function appendPrompt(base: string, extra: string): string {
@@ -20,11 +20,11 @@ function appendPrompt(base: string, extra: string): string {
 
 const ONBOARDING = readOnboarding();
 
-// Onboarding ships in two layouts: `../shared/` in the source repo, `../skills/`
+// Onboarding ships in two layouts: `../shared/` in the source repo, `../references/`
 // in the built pi package (build/plan.ts). Try both rather than baking a path.
 function readOnboarding(): string {
-  const up = dirname(here);
-  const candidates = [join(up, "shared", "onboarding.md"), join(up, "skills", "onboarding.md")];
+  const up = dirname(moduleDir);
+  const candidates = [join(up, "shared", "onboarding.md"), join(up, "references", "onboarding.md")];
   for (const path of candidates) {
     try {
       return readFileSync(path, "utf8");
@@ -33,12 +33,12 @@ function readOnboarding(): string {
     }
   }
   throw new Error(
-    `herdr-subagents: could not find onboarding.md relative to ${here}. ` +
+    `herdr-subagents: could not find onboarding.md relative to ${moduleDir}. ` +
       `Expected one of: ${candidates.join(", ")}.`,
   );
 }
 
-// Bus channels (spec §8), prefixed with the unscoped package name. The provider
+// Bus channels, prefixed with the unscoped package name. The provider
 // (this extension) and the consumer (`pi-cc-plugins`, separate repo) use these
 // to find each other and to carry registrations.
 const PKG = "pi-herdr-subagents";
@@ -75,7 +75,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
 
   const registrar = createRegistrar();
 
-  // Eager emit-both-ways presence handshake (spec §8). Both sides act at
+  // Eager emit-both-ways presence handshake. Both sides act at
   // factory time, where load order is not guaranteed, so each emits its own
   // signal AND listens for the other's; whichever loads second triggers the
   // first's listener. The flag is correct by session start.
@@ -114,7 +114,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   // Registrations arrive over the bus from pi-cc-plugins (or any other
   // provider). Each one REPLACES per (source, namespace) rather than
   // accumulating, so a session switch drops the previous project's agents with
-  // no staleness. Fire-and-forget: no acknowledgement (spec §8).
+  // no staleness. Fire-and-forget: no acknowledgement.
   unsubs.push(
     pi.events.on(REGISTER, (data) => {
       const payload = data as RegisterPayload;
@@ -124,7 +124,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   );
 
   // Spawn-time fields on an AgentRecord that this extension cannot apply from
-  // before_agent_start — they need upstream pi support (spec §Out of Scope).
+  // before_agent_start — they need upstream pi support.
   // Warned once per session per agent so the limit surfaces honestly instead of
   // being silently dropped. Closure-scoped: one factory call = one session.
   const warnedUnapplied = new Set<string>();
@@ -147,16 +147,15 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", async (event) => {
     let systemPrompt: string | undefined;
-    let message: BeforeAgentStartEventResult["message"];
 
-    // Onboarding (spec §6): injected only for herdr-launched children, gated
+    // Onboarding: injected only for herdr-launched children, gated
     // by HERDR_SUBAGENT presence. Absent → a normal session pays nothing.
     if (process.env.HERDR_SUBAGENT != null) {
       systemPrompt = appendPrompt(event.systemPrompt, ONBOARDING);
     }
 
-    // Agent-definition consumption (spec §7): apply the resolved agent's
-    // system prompt and initial prompt. Runs independently of onboarding — a
+    // Agent-definition consumption: apply the resolved agent's
+    // system prompt. Runs independently of onboarding — a
     // child can be launched with `--agent` but without HERDR_SUBAGENT. The
     // `--agent` flag is registered declaratively above (research §1.1).
     const agentName = pi.getFlag("agent");
@@ -169,20 +168,11 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
         if (agent.systemPrompt) {
           systemPrompt = appendPrompt(systemPrompt ?? event.systemPrompt, agent.systemPrompt);
         }
-        if (agent.initialPrompt) {
-          message = {
-            customType: "herdr-subagents:initial-prompt",
-            content: agent.initialPrompt,
-            display: false,
-          };
-        }
       }
     }
 
-    if (systemPrompt === undefined && message === undefined) return;
-    const result: BeforeAgentStartEventResult = {};
-    if (systemPrompt !== undefined) result.systemPrompt = systemPrompt;
-    if (message !== undefined) result.message = message;
+    if (systemPrompt === undefined) return;
+    const result: BeforeAgentStartEventResult = { systemPrompt };
     return result;
   });
 

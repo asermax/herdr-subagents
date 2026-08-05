@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 
-// Agent-resolution role of the pi extension (spec §7/§8).
+// Agent-resolution role of the pi extension.
 //
 // `.claude/agents/*.md` is the canonical agent-definition format for both
 // harnesses; pi does not scan it natively. This module resolves those files on
@@ -34,11 +34,10 @@ export interface AgentRecord {
   thinking?: string;
   turnBudget?: { maxTurns: number };
   skills?: string[];
-  initialPrompt?: string;
   // The Markdown body below the frontmatter is the agent's system prompt in
   // the Claude format; appended at launch (systemPromptMode: "append").
   systemPrompt?: string;
-  // Fixed application defaults (spec §7): the Claude format has no toggles for
+  // Fixed application defaults: the Claude format has no toggles for
   // these, so they are constant per agent.
   systemPromptMode: "append";
   inheritProjectContext: true;
@@ -141,7 +140,7 @@ function loadDirectory(dir: string, source: Source, namespace: string): LoadResu
   return { agents, warnings };
 }
 
-/** A bus registration payload (spec §8): absolute paths + namespace + source. */
+/** A bus registration payload: absolute paths + namespace + source. */
 export interface RegisterPayload {
   version: 1;
   paths: string[];
@@ -186,12 +185,9 @@ function parseAgentFile(path: string): ParsedFile | null {
   const skills = listField(frontmatter, "skills");
   if (skills.length > 0) record.skills = skills;
 
-  const initialPrompt = stringField(frontmatter, "initialPrompt");
-  if (initialPrompt) record.initialPrompt = initialPrompt;
-
   if (body.length > 0) record.systemPrompt = body;
 
-  // Dropped silently (spec §7): tools, disallowedTools, model, mcpServers,
+  // Dropped silently: tools, disallowedTools, model, mcpServers,
   // hooks, memory, background, isolation, color. They are parsed and ignored.
   return { record };
 }
@@ -257,7 +253,7 @@ function mergeByRank(bus: Map<string, Map<string, AgentRecord>>): AgentRecord[] 
   const batches = [...bus.values()].map((m) => [...m.values()]);
   // Key on the qualified name: a standalone `reviewer` and a plugin's
   // `my-plugin:reviewer` are distinct identities and must not shadow each
-  // other (spec §7 — plugin-shipped agents are namespaced). Only agents that
+  // other (plugin-shipped agents are namespaced). Only agents that
   // share a qualified name compete on the source precedence rank.
   const byName = new Map<string, AgentRecord>();
   for (const batch of batches) {

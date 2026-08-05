@@ -129,9 +129,9 @@ describe("generated claude delegate skill (Seam 1)", () => {
 // file both injection paths read. This guards that the hook reads the shipped
 // copy, not a stale path, without asserting on skill prose.
 describe("hook emits the shipped onboarding", () => {
-  it("stdout equals skills/onboarding.md when the gate is set", async () => {
+  it("stdout equals references/onboarding.md when the gate is set", async () => {
     const { stdout } = await runHook({ HERDR_SUBAGENT: "1" });
-    const shipped = readFileSync(join(PLUGIN_ROOT, "skills/onboarding.md"), "utf8");
+    const shipped = readFileSync(join(PLUGIN_ROOT, "references/onboarding.md"), "utf8");
     expect(stdout).toBe(shipped);
   });
 });
