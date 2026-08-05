@@ -32,6 +32,10 @@ const CLAUDE_ONBOARDING_HOOK = "claude/hooks/onboarding.sh";
 
 const CLAUDE_HOOKS_JSON = "claude/hooks/hooks.json";
 
+const PI_README = "pi/README.md";
+
+const CLAUDE_README = "claude/README.md";
+
 /**
  * The file plan for a harness artifact.
  *
@@ -54,6 +58,7 @@ export function filePlan(harness: Harness): EmitFile[] {
         render: (map) => delegateSkill(map, PI_AGENT_DIRS),
       },
       { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
+      { dest: "README.md", type: "copy", src: PI_README },
       // The extension ships as source .ts that pi loads via its tsx loader
       // (matches @asermax/pi-cc-plugins' shape). Token-free, copied verbatim.
       { dest: "extension/index.ts", type: "copy", src: "extension/index.ts" },
@@ -76,6 +81,7 @@ export function filePlan(harness: Harness): EmitFile[] {
       render: (map) => delegateSkill(map),
     },
     { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
+    { dest: "README.md", type: "copy", src: CLAUDE_README },
     { dest: "hooks/hooks.json", type: "copy", src: CLAUDE_HOOKS_JSON },
     { dest: "hooks/onboarding.sh", type: "copy", src: CLAUDE_ONBOARDING_HOOK },
     {
@@ -139,10 +145,10 @@ function piManifest(version: string): string {
         // The helper binary, invokable by absolute path from the extension and
         // the {{helper}} skill token.
         bin: {
-          "herdr-helper": "./herdr-helper",
+          "herdr-helper": "herdr-helper",
         },
         // Extension source + the helper binary ship in the tarball.
-        files: ["skills/", "references/", "extension/", "herdr-helper"],
+        files: ["skills/", "references/", "extension/", "herdr-helper", "README.md"],
         pi: {
           extensions: ["./extension/index.ts"],
           skills: ["./skills"],
