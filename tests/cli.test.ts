@@ -108,9 +108,14 @@ describe("CLI value-bearing --label", () => {
     // --. citty must too: if it dropped the value, --label would read as
     // missing and fail with exit 2 "--label is required". Instead the parse
     // succeeds and the command reaches the socket check (exit 1).
+    //
+    // spawn reads HERDR_WORKSPACE_ID before the socket check, so set a dummy
+    // value: without it a clean env (CI) fails on the workspace check instead
+    // of the socket check the assertion expects. Locally the shell inherits
+    // it, which hid the dependency.
     const { code, stderr } = await runCli(
       ["spawn", "--kind", "pi", "--agent", "doer", "--label", "--refactor", "--body", "x"],
-      { HERDR_SOCKET_PATH: "" },
+      { HERDR_SOCKET_PATH: "", HERDR_WORKSPACE_ID: "test-ws" },
     );
     expect(code).toBe(1);
     expect(stderr).not.toMatch(/--label is required/);
