@@ -51,7 +51,7 @@ export function filePlan(harness: Harness): EmitFile[] {
         type: "generate",
         // Frontmatter (name + description) so pi registers the skill; the body
         // is the shared protocol with tokens substituted for this harness.
-        render: (map) => delegateSkill(map),
+        render: (map) => delegateSkill(map, PI_AGENT_DIRS),
       },
       { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
       // The extension ships as source .ts that pi loads via its tsx loader
@@ -98,7 +98,7 @@ function readSrc(rel: string): string {
   return readFileSync(join(srcDir, rel), "utf8");
 }
 
-function delegateSkill(map: TokenMap): string {
+function delegateSkill(map: TokenMap, suffix = ""): string {
   const frontmatter = [
     "---",
     "name: delegate",
@@ -106,8 +106,19 @@ function delegateSkill(map: TokenMap): string {
     "---",
     "",
   ].join("\n");
-  return frontmatter + substitute(readSrc(PROTOCOL), map);
+  return frontmatter + substitute(readSrc(PROTOCOL), map) + suffix;
 }
+
+// pi-only: names the concrete directories the extension scans for agent
+// definitions, so the agent can look there before picking an --agent name.
+// `.pi/agents/` is scanned recursively (subdirectories like `cc-plugins/`
+// are included); `.claude/agents/` is top-level only.
+const PI_AGENT_DIRS = `
+
+## Agent definitions on pi
+
+Agent names you can pass to \`--agent\` are defined as \`.md\` files under \`.claude/agents/\` and \`.pi/agents/\` (scanned recursively — subdirectories like \`cc-plugins/\` are included). Read those directories to see which agents are available before picking a name.
+`;
 
 function piManifest(version: string): string {
   return (
