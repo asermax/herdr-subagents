@@ -171,9 +171,16 @@ Two distinct mechanisms (`docs/extensions.md:1388-1478`):
   is how an inbound intercom message becomes a turn in the recipient (see §3.3).
 - `pi.appendEntry(customType, data?)` writes a **TUI-only** entry that is not
   sent to the LLM, rendered with `pi.registerEntryRenderer(customType,
-  renderer)`. Use this for status cards, progress widgets, etc. pi-subagents'
+  renderer)`. Use this for progress widgets, etc. pi-subagents'
 background/async run status uses this style of durable entry plus a
 `status.json`/`events.jsonl` sidecar under an async dir.
+- `ctx.ui.setStatus(key, text)` writes a **footer status line** (the line above
+  the input); `ctx.ui.setStatus(key, undefined)` clears it. `ctx.ui` is on the
+  handler context (`pi.on(event, (e, ctx) => ctx.ui.setStatus(...))`), not on
+  `pi` directly. herdr-subagents' parent role uses this to summarize every
+  tracked child as one keyed line (`herdr-subagents`), recomputed on each
+  status change and cleared when there are no children. See
+  `examples/extensions/status-line.ts`.
 
 ## 2. pi-subagents
 

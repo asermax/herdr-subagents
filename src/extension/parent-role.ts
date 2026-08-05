@@ -3,14 +3,13 @@ import { existsSync } from "node:fs";
 import type { Readable } from "node:stream";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Box, Text } from "@earendil-works/pi-tui";
-import type { Component } from "@earendil-works/pi-tui";
-import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // Parent-side role of the herdr-subagents pi extension. Owns ONLY the bridge
 // between `helper watch` and the parent session:
 //   - spawns `helper watch` once per session
-//   - forwards each change as a TUI-only status card (pi.appendEntry)
+//   - summarizes every tracked child as ONE footer status line
+//     (ctx.ui.setStatus), recomputed on each change
 //   - on a terminal state (done|gone) forwards a compact wake (pi.sendMessage
 //     with triggerTurn); blocked NEVER wakes
 //
@@ -20,8 +19,8 @@ import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-
 // No coalescing — native delivery semantics already prevent a burst from
 // derailing a turn.
 
-const STATUS_CARD_TYPE = "herdr-subagents:status";
-const WAKE_TYPE = "herdr-subagents:wake";
+export const STATUS_KEY = "herdr-subagents";
+export const WAKE_TYPE = "herdr-subagents:wake";
 
 // `unknown` reads as `gone`: detection lost (CONTEXT.md / collect normalize).
 // Terminal states wake; blocked never does.
@@ -53,10 +52,100 @@ export function packageRoot(start: string): string {
   }
 }
 
-export interface StatusCard {
+// The shape carried on every `helper watch` line: one per child status change.
+export interface ChildStatus {
   pane_id: string;
   label: string;
   status: string;
+}
+
+// The footer status surface. `ctx.ui` (ExtensionUIContext) satisfies this; a
+// test passes a plain spy. `setStatus(key, undefined)` clears the line.
+export interface StatusSink {
+  setStatus(key: string, text: string | undefined): void;
+}
+
+// Sends the terminal-state wake. Mirrors the slice of ExtensionAPI.sendMessage
+// the parent role uses, so the per-line logic is testable without a full pi.
+export type WakeSender = (
+  message: { customType: string; content: string; display: boolean },
+  options: { triggerTurn: boolean },
+) => void;
+
+// Tracked-children state for one session. `processLine` mutates it; the footer
+// line is recomputed from it after every change.
+export interface ParentRoleState {
+  children: Map<string, ChildStatus>;
+}
+
+export function createParentRoleState(): ParentRoleState {
+  return { children: new Map() };
+}
+
+// The footer line summarizing every tracked child as `name: status`, ordered
+// by pane id. Returns undefined when there are no children so the caller can
+// clear the line. The name falls back to the pane id when a child has no label.
+export function renderStatusLine(children: Map<string, ChildStatus>): string | undefined {
+  if (children.size === 0) return undefined;
+  const ordered = [...children.values()].sort((a, b) =>
+    a.pane_id < b.pane_id ? -1 : a.pane_id > b.pane_id ? 1 : 0,
+  );
+  return ordered.map((c) => `${c.label || c.pane_id}: ${c.status}`).join(" | ");
+}
+
+// One watch line → one status-line refresh, plus a wake on terminal-only
+// states. `gone` (detection lost) drops the child from the tracked set so the
+// summary shrinks; the wake still fires. Pipe-fitting (spec Testing
+// §"Not covered"): the spawn → line plumbing is exercised by the dev loop,
+// but this core is unit-tested directly.
+export function processLine(
+  state: ParentRoleState,
+  sink: StatusSink | undefined,
+  sendWake: WakeSender,
+  rawLine: string,
+): void {
+  let rec: ChildStatus;
+  try {
+    rec = JSON.parse(rawLine) as ChildStatus;
+  } catch {
+    return;
+  }
+  if (!rec.pane_id || !rec.status) return;
+
+  // `unknown` reads as `gone`: detection lost (CONTEXT.md / collect normalize).
+  // herdr never pushes `gone`; we derive it so a terminal wake still fires.
+  const status = rec.status === "unknown" ? "gone" : rec.status;
+  const prev = state.children.get(rec.pane_id);
+  const child: ChildStatus = {
+    pane_id: rec.pane_id,
+    label: rec.label ?? prev?.label ?? "",
+    status,
+  };
+
+  if (status === "gone") {
+    state.children.delete(rec.pane_id);
+  } else {
+    state.children.set(rec.pane_id, child);
+  }
+
+  sink?.setStatus(STATUS_KEY, renderStatusLine(state.children));
+
+  if (!TERMINAL.has(status)) return;
+
+  // The wake — terminal state only, compact, no payload. triggerTurn wakes an
+  // idle parent; mid-turn it queues and lands at the turn boundary (research
+  // §1.6). Wake-then-collect: the parent collects deliberately.
+  sendWake(
+    { customType: WAKE_TYPE, content: wakeContent(child), display: true },
+    { triggerTurn: true },
+  );
+}
+
+// The wake carries no payload: a one-line nudge naming the child and state, so
+// the parent knows to collect. The result is NOT here.
+function wakeContent(rec: ChildStatus): string {
+  const name = rec.label ? `"${rec.label}"` : rec.pane_id;
+  return `Child ${name} reached ${rec.status}. Run \`helper collect ${rec.pane_id}\` to read its result.`;
 }
 
 // The minimal surface the parent role reads from a spawned `helper watch`.
@@ -69,14 +158,17 @@ export interface WatchProcess {
 
 export function registerParentRole(pi: ExtensionAPI): () => void {
   const unsubs: Array<() => void> = [];
+  const state = createParentRoleState();
+  const sendWake: WakeSender = (message, options) => {
+    pi.sendMessage(message, options);
+  };
 
-  // One status-card renderer per child, TUI-only. Custom entries do not
-  // participate in LLM context (research §1.6). The renderer updates in place
-  // as appendEntry is called with new data.
-  pi.registerEntryRenderer<StatusCard>(STATUS_CARD_TYPE, (entry, _opts, theme) => {
-    const d = entry.data;
-    if (!d) return undefined;
-    return renderStatusCard(d, theme);
+  // The watch data callback runs outside any handler and so has no `ctx`. The
+  // footer status sink lives on the handler context's `ctx.ui`, so capture it
+  // once at session_start — stable for a single session.
+  let ui: StatusSink | undefined;
+  pi.on("session_start", (_event, ctx) => {
+    ui = ctx.ui;
   });
 
   let child: WatchProcess | null = null;
@@ -102,12 +194,12 @@ export function registerParentRole(pi: ExtensionAPI): () => void {
         const line = buffer.slice(0, nl);
         buffer = buffer.slice(nl + 1);
         if (line.trim() === "") continue;
-        forward(pi, line);
+        processLine(state, ui, sendWake, line);
       }
     });
     // Errors/exit are swallowed: watch is best-effort telemetry. The registry
-    // and `helper list` are the durable record; a dead watcher loses live
-    // status cards but never loses a child.
+    // and `helper list` are the durable record; a dead watcher loses the live
+    // status line but never loses a child.
     child.on("error", () => {
       child = null;
     });
@@ -117,9 +209,10 @@ export function registerParentRole(pi: ExtensionAPI): () => void {
   };
 
   // Spawn once per session. A bare no-children registry is fine: watch stays
-  // alive and quiet, and there is nothing to do until a child is spawned.
-  // (New children appear on the next watch resubscribe — the extension does
-  // not manage the subscription lifecycle; the helper owns the registry.)
+  // alive and quiet, the status line stays clear, and there is nothing to do
+  // until a child is spawned. (New children appear on the next watch
+  // resubscribe — the extension does not manage the subscription lifecycle;
+  // the helper owns the registry.)
   start();
 
   const stop = () => {
@@ -152,68 +245,4 @@ function spawnWatch(): WatchProcess {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
   }) as unknown as WatchProcess;
-}
-
-// One forwarded line → one status card, plus a wake on terminal-only states.
-// Pipe-fitting (spec Testing §"Not covered"): exercised by the dev loop, not
-// unit-tested.
-function forward(pi: ExtensionAPI, rawLine: string): void {
-  let rec: StatusCard;
-  try {
-    rec = JSON.parse(rawLine) as StatusCard;
-  } catch {
-    return;
-  }
-  if (!rec.pane_id || !rec.status) return;
-
-  // `unknown` reads as `gone`: detection lost (CONTEXT.md / collect normalize).
-  // herdr never pushes `gone`; we derive it so a terminal wake still fires.
-  const status = rec.status === "unknown" ? "gone" : rec.status;
-  const card: StatusCard = {
-    pane_id: rec.pane_id,
-    label: rec.label ?? "",
-    status,
-  };
-
-  // TUI-only status card per child — display, never sent to the LLM.
-  pi.appendEntry<StatusCard>(STATUS_CARD_TYPE, card);
-
-  if (!TERMINAL.has(status)) return;
-
-  // The wake — terminal state only, compact, no payload. triggerTurn wakes an
-  // idle parent; mid-turn it queues and lands at the turn boundary (research
-  // §1.6). Wake-then-collect: the parent collects deliberately.
-  pi.sendMessage(
-    { customType: WAKE_TYPE, content: wakeContent(card), display: true },
-    { triggerTurn: true },
-  );
-}
-
-// The wake carries no payload: a one-line nudge naming the child and state, so
-// the parent knows to collect. The result is NOT here.
-function wakeContent(rec: StatusCard): string {
-  const name = rec.label ? `"${rec.label}"` : rec.pane_id;
-  return `Child ${name} reached ${rec.status}. Run \`helper collect ${rec.pane_id}\` to read its result.`;
-}
-
-function renderStatusCard(d: StatusCard, theme: Theme): Component {
-  const color = statusThemeColor(d.status);
-  const line = `${theme.bold(d.label || d.pane_id)} — ${theme.fg(color, d.status)}`;
-  const box = new Box(1, 0);
-  box.addChild(new Text(line));
-  return box;
-}
-
-function statusThemeColor(status: string): ThemeColor {
-  switch (status) {
-    case "done":
-    case "gone":
-      return "success";
-    case "blocked":
-      return "warning";
-    case "working":
-      return "accent";
-    default:
-      return "muted";
-  }
 }

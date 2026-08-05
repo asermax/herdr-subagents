@@ -48,8 +48,6 @@ interface FakePi {
     on: ReturnType<typeof vi.fn>;
     emit: ReturnType<typeof vi.fn>;
   };
-  registerEntryRenderer: ReturnType<typeof vi.fn>;
-  appendEntry: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   handlers: Map<string, CapturedHandler>;
   busHandlers: Map<string, (data: unknown) => void>;
@@ -99,11 +97,10 @@ function createFakePi(): FakePi {
         if (handler) handler(data);
       }),
     },
-    // The parent-side role calls these at registration time. They are
-    // pipe-fitting (spec Testing §"Not covered") and are NOT asserted here —
-    // the fake pi only needs to provide them so the factory composes.
-    registerEntryRenderer: vi.fn(),
-    appendEntry: vi.fn(),
+    // The parent-side role registers a session_start handler (captured in
+    // `handlers`) to capture ctx.ui for the footer status line, and calls
+    // sendMessage lazily on a terminal-state wake. sendMessage is
+    // pipe-fitting (spec Testing §"Not covered") and is NOT asserted here.
     sendMessage: vi.fn(),
     handlers,
     busHandlers,
@@ -151,6 +148,16 @@ describe("extension factory", () => {
     extension(pi as any);
 
     expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
+  });
+
+  it("registers a session_start handler to capture ctx.ui for the footer status line", () => {
+    // The parent role's watch callback has no handler ctx, so it captures
+    // ctx.ui once at session_start. The handler must be registered at factory
+    // time so the first status change can reach the footer.
+    const pi = createFakePi();
+    extension(pi as any);
+
+    expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
   });
 });
 

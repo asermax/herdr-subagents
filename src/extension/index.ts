@@ -194,8 +194,8 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   };
   currentHandle = handle;
 
-  // Parent-side role: spawn `helper watch`, forward changes into
-  // TUI-only status cards, and wake on terminal-only states. Pushes its
+  // Parent-side role: spawn `helper watch`, summarize tracked children into
+  // one footer status line, and wake on terminal-only states. Pushes its
   // teardown into the drain list so session_shutdown stops the watcher.
   unsubs.push(registerParentRole(pi));
 }

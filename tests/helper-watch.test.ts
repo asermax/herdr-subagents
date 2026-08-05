@@ -6,13 +6,19 @@
 // `events.subscribe` — it acks `subscription_started`, then streams the
 // scripted changes. `watch` reads the registry to know which children to watch.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { buildSync } from "esbuild";
 import { StubHerdrServer, type StreamedChange } from "./stub-server.js";
+import {
+  processLine,
+  createParentRoleState,
+  STATUS_KEY,
+  WAKE_TYPE,
+} from "../src/extension/parent-role.js";
 
 const BUILT = buildCliOnce();
 
@@ -299,5 +305,113 @@ describe("helper watch mid-session children", () => {
     const emitted = lines.map((l) => JSON.parse(l).pane_id);
     expect(emitted).toContain("w1Z:p1");
     expect(emitted).toContain("w1Z:p2");
+  });
+});
+
+describe("parent-role status line", () => {
+  // Seam: processLine is the bridge between `helper watch` output and the
+  // footer status line. It is driven directly with a fake sink (the captured
+  // ctx.ui) and a fake wake sender — the spawn → line plumbing is
+  // pipe-fitting (spec Testing §"Not covered"). This is the consumer side of
+  // the watch stream; the describe blocks above cover the producer.
+
+  function setup() {
+    const state = createParentRoleState();
+    const setStatus = vi.fn();
+    const sink = { setStatus };
+    const sendWake = vi.fn();
+    return { state, sink, sendWake, setStatus };
+  }
+
+  const line = (pane_id: string, status: string, label = ""): string =>
+    JSON.stringify({ pane_id, label, status });
+
+  it("a status change sets a footer line naming the child and its status", () => {
+    const { state, sink, sendWake, setStatus } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+
+    // One setStatus call — not an appendEntry card — reflecting name + status.
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith(STATUS_KEY, "cleaner: working");
+  });
+
+  it("falls back to the pane id when the child has no label", () => {
+    const { state, sink, sendWake, setStatus } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p9", "idle"));
+    expect(setStatus).toHaveBeenCalledWith(STATUS_KEY, "w1Z:p9: idle");
+  });
+
+  it("summarizes every tracked child in one line, ordered by pane id", () => {
+    const { state, sink, sendWake, setStatus } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p2", "done", "reviewer"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+
+    expect(setStatus).toHaveBeenLastCalledWith(
+      STATUS_KEY,
+      "cleaner: working | reviewer: done",
+    );
+  });
+
+  it("clears the line (setStatus undefined) when no children remain", () => {
+    const { state, sink, sendWake, setStatus } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+    expect(setStatus).toHaveBeenLastCalledWith(STATUS_KEY, "cleaner: working");
+
+    // gone = detection lost: the child drops out of the live summary.
+    processLine(state, sink, sendWake, line("w1Z:p1", "gone", "cleaner"));
+    expect(setStatus).toHaveBeenLastCalledWith(STATUS_KEY, undefined);
+  });
+
+  it("normalizes unknown to gone and clears when that empties the fleet", () => {
+    const { state, sink, sendWake, setStatus } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "unknown", "cleaner"));
+    expect(setStatus).toHaveBeenLastCalledWith(STATUS_KEY, undefined);
+  });
+
+  it("wakes (triggerTurn) on terminal done, naming the child and state", () => {
+    const { state, sink, sendWake } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "done", "reviewer"));
+
+    expect(sendWake).toHaveBeenCalledTimes(1);
+    expect(sendWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customType: WAKE_TYPE,
+        content: expect.stringContaining("reviewer"),
+        display: true,
+      }),
+      { triggerTurn: true },
+    );
+  });
+
+  it("wakes on gone too (and drops the child from the line)", () => {
+    const { state, sink, sendWake } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "gone", "cleaner"));
+    expect(sendWake).toHaveBeenCalledWith(
+      expect.objectContaining({ customType: WAKE_TYPE }),
+      { triggerTurn: true },
+    );
+  });
+
+  it("does NOT wake on a non-terminal status (working/blocked/idle)", () => {
+    const { state, sink, sendWake } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "blocked", "cleaner"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "idle", "cleaner"));
+    expect(sendWake).not.toHaveBeenCalled();
+  });
+
+  it("ignores a malformed line and leaves the line untouched", () => {
+    const { state, sink, sendWake, setStatus } = setup();
+    processLine(state, sink, sendWake, "not json");
+    expect(setStatus).not.toHaveBeenCalled();
+    expect(sendWake).not.toHaveBeenCalled();
+  });
+
+  it("ignores a line missing pane_id or status", () => {
+    const { state, sink, sendWake, setStatus } = setup();
+    processLine(state, sink, sendWake, JSON.stringify({ pane_id: "w1Z:p1" }));
+    processLine(state, sink, sendWake, JSON.stringify({ status: "working" }));
+    expect(setStatus).not.toHaveBeenCalled();
   });
 });
