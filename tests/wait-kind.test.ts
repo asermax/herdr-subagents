@@ -26,9 +26,8 @@ describe("spawn --kind restriction", () => {
     try {
       const client = new FakeHerdrClient({ socketPath: server.socketPath });
       client.opts.snapshots = {
-        "w1Z:p1": { ...baseSnapshot(), state_change_seq: 5 },
+        "w1Z:p1": { ...baseSnapshot() },
       };
-      server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
       await spawnChild(
         {
           kind: "claude",
@@ -36,9 +35,8 @@ describe("spawn --kind restriction", () => {
           label: "do the thing",
           cwd: "/repo",
           workspaceId: "w1Z",
-          body: "<supervisor-agent>x</supervisor-agent>",
         },
-        { client, bounds: { deliveryStallMs: 1000 } },
+        { client },
       );
       const start = client.calls.find((c: Call) => c.method === "agent.start")!;
       expect(start.args.kind).toBe("claude");

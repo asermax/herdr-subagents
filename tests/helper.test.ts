@@ -15,7 +15,7 @@ async function expectFail<T>(p: Promise<T>): Promise<SpawnFailure> {
 }
 import type { AgentSnapshot } from "../src/helper/herdr-types.js";
 import { fileRegistryStore, Registry, type RegistryEntry, type RegistryStore } from "../src/helper/registry.js";
-import { StubHerdrServer, type ScriptedEvent } from "./stub-server.js";
+import { StubHerdrServer } from "./stub-server.js";
 import { FakeHerdrClient } from "./fake-client.js";
 
 let server: StubHerdrServer;
@@ -58,7 +58,6 @@ function defaultSpawnInput(over: Record<string, unknown> = {}) {
     label: "do the thing",
     cwd: "/repo",
     workspaceId: "w1Z",
-    body: "<supervisor-agent>do the thing</supervisor-agent>",
     ...over,
   };
 }
@@ -68,18 +67,9 @@ function defaultSpawnInput(over: Record<string, unknown> = {}) {
 describe("spawn tab creation", () => {
   it("creates the tab with the gate in env, no focus, and the final label", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = {
-      "w1Z:p1": makeSnapshot({ state_change_seq: 5 }),
-    };
-    // The prompt delivery: after the prompt, a status change arrives.
-    server.script([
-      { paneId: "w1Z:p1", status: "working", seq: 6 } as ScriptedEvent,
-    ]);
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
 
-    const result = await spawnChild(defaultSpawnInput(), {
-      client,
-      bounds: { deliveryStallMs: 1000 },
-    });
+    const result = await spawnChild(defaultSpawnInput(), { client });
 
     const createCall = client.calls.find((c) => c.method === "tab.create")!;
     expect(createCall.args.focus).toBe(false);
@@ -97,8 +87,7 @@ describe("spawn tab creation", () => {
 describe("spawn dev-loop forwarding", () => {
   it("forwards HERDR_SUBAGENT_* env to the child tab alongside the gate", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
-    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
 
     await spawnChild(
       defaultSpawnInput({
@@ -107,7 +96,7 @@ describe("spawn dev-loop forwarding", () => {
           HERDR_SUBAGENT_HELPER: "/repo/build/out/pi/herdr-helper",
         },
       }),
-      { client, bounds: { deliveryStallMs: 1000 } },
+      { client },
     );
 
     const createCall = client.calls.find((c) => c.method === "tab.create")!;
@@ -119,14 +108,13 @@ describe("spawn dev-loop forwarding", () => {
 
   it("forwards passThroughArgs onto the child agent-start argv after --agent", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
-    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
 
     await spawnChild(
       defaultSpawnInput({
         passThroughArgs: ["--extension", "/repo/src/extension/index.ts", "--skill", "/repo/build/out/pi/skills"],
       }),
-      { client, bounds: { deliveryStallMs: 1000 } },
+      { client },
     );
 
     const startCall = client.calls.find((c) => c.method === "agent.start")!;
@@ -146,12 +134,11 @@ describe("spawn dev-loop forwarding", () => {
 describe("spawn generic (no --agent)", () => {
   it("omits --agent from agent-start args and uses the label as tracking name", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
-    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
 
     await spawnChild(
       defaultSpawnInput({ agentName: undefined, passThroughArgs: ["--skill", "/repo/skills"] }),
-      { client, bounds: { deliveryStallMs: 1000 } },
+      { client },
     );
 
     const startCall = client.calls.find((c) => c.method === "agent.start")!;
@@ -164,13 +151,9 @@ describe("spawn generic (no --agent)", () => {
 
   it("skips verify-and-rename for a generic child", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
-    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
 
-    await spawnChild(defaultSpawnInput({ agentName: undefined }), {
-      client,
-      bounds: { deliveryStallMs: 1000 },
-    });
+    await spawnChild(defaultSpawnInput({ agentName: undefined }), { client });
 
     const renames = client.calls.filter((c) => c.method === "agent.rename");
     expect(renames).toHaveLength(0);
@@ -182,18 +165,13 @@ describe("spawn generic (no --agent)", () => {
 describe("spawn verify-and-rename", () => {
   it("verifies the name and renames when the stub reports it missing", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    // Name is missing on the first get (seq 5), but present after one rename.
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
     // First get reports no name; after a rename, the name lands.
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
     client.opts.nameAfterRename = {
       "w1Z:p1": (attempts) => (attempts === 0 ? "" : "doer"),
     };
-    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
 
-    await spawnChild(defaultSpawnInput(), {
-      client,
-      bounds: { deliveryStallMs: 1000 },
-    });
+    await spawnChild(defaultSpawnInput(), { client });
 
     const renames = client.calls.filter((c) => c.method === "agent.rename");
     expect(renames.length).toBe(1);
@@ -202,12 +180,12 @@ describe("spawn verify-and-rename", () => {
 
   it("exhausts rename attempts and reports failure, closing the tab", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
     // Name never lands.
     client.opts.nameAfterRename = { "w1Z:p1": () => "" };
 
     const failure = await expectFail(
-      spawnChild(defaultSpawnInput(), { client, bounds: { maxRenameAttempts: 2, deliveryStallMs: 1000 } }),
+      spawnChild(defaultSpawnInput(), { client, bounds: { maxRenameAttempts: 2 } }),
     );
 
     expect(failure.reason).toBe("name");
@@ -220,58 +198,20 @@ describe("spawn verify-and-rename", () => {
   it("does not rename a pane that is briefly not detected, and recovers", async () => {
     const client = new FakeHerdrClient({
       socketPath: server.socketPath,
-      snapshots: { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) },
+      snapshots: { "w1Z:p1": makeSnapshot() },
       // First get reports `unknown` (transient detection-loss); the next detects.
       snapshotByGetIndex: {
         "w1Z:p1": (idx) => (idx === 1 ? { agent_status: "unknown" } : undefined),
       },
     });
-    server.script([{ paneId: "w1Z:p1", status: "working", seq: 6 }]);
 
-    await spawnChild(defaultSpawnInput(), { client, bounds: { deliveryStallMs: 1000 } });
+    await spawnChild(defaultSpawnInput(), { client });
 
     // No rename attempted on a not-detected pane (it would fail and close the tab).
     const renames = client.calls.filter((c) => c.method === "agent.rename");
     expect(renames).toHaveLength(0);
     const closes = client.calls.filter((c) => c.method === "tab.close");
     expect(closes).toHaveLength(0);
-  });
-});
-
-// --- spawn: verify-delivery (7-of-8 case) -------------------------------
-
-describe("spawn verify-delivery", () => {
-  it("resends when the stub reports no status change in the stall window", async () => {
-    const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
-    // First prompt: no event matches in the window (dropped). The resend
-    // (attempt 2) finds a delivery.
-    server.script([
-      { paneId: "w1Z:p1", status: "working", seq: 6, deliverOnAttempt: 2 } as ScriptedEvent,
-    ]);
-
-    await spawnChild(defaultSpawnInput(), {
-      client,
-      bounds: { deliveryStallMs: 50, maxPromptAttempts: 3 },
-    });
-
-    const prompts = client.calls.filter((c) => c.method === "agent.prompt");
-    expect(prompts.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("exhausts delivery attempts and reports failure, closing the tab", async () => {
-    const client = new FakeHerdrClient({ socketPath: server.socketPath });
-    client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
-    // No events ever — every prompt looks dropped.
-    server.script([]);
-
-    const failure = await expectFail(
-      spawnChild(defaultSpawnInput(), { client, bounds: { deliveryStallMs: 50, maxPromptAttempts: 2 } }),
-    );
-
-    expect(failure.reason).toBe("delivery");
-    const closes = client.calls.filter((c) => c.method === "tab.close");
-    expect(closes.length).toBe(1);
   });
 });
 

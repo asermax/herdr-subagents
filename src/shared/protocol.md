@@ -50,6 +50,8 @@ Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-
 {{helper}} prompt <pane_id> --body "<supervisor-agent>… your task …</supervisor-agent>"
 ```
 
+Delivery is verified: the helper watches for the child to act on the prompt and resends if the first send is dropped.
+
 {{wake}}
 
 ## Collect

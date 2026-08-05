@@ -6,6 +6,7 @@ import { defineCommand, runMain } from "citty";
 import { collectChild, waitChild, type CollectDeps } from "./collect.js";
 import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
+import { DEFAULT_PROMPT_BOUNDS, deliverPrompt } from "./prompt.js";
 import { fileRegistryStore, Registry } from "./registry.js";
 import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
 import { runWatch } from "./watch.js";
@@ -21,7 +22,7 @@ function isKind(v: string): v is Kind {
 // to the child's harness (a parent under development passes the same flags to
 // its children; production passes nothing). Not an allowlist — the complement
 // of our own surface, so future flags forward by default.
-const SPAWN_OWN_FLAGS = new Set(["kind", "agent", "label", "body", "cwd", "workspace"]);
+const SPAWN_OWN_FLAGS = new Set(["kind", "agent", "label", "cwd", "workspace"]);
 
 const SUBCOMMANDS = new Set(["spawn", "prompt", "wait", "collect", "list", "close", "watch"]);
 const USAGE = "usage: helper <spawn|prompt|wait|collect|list|close|watch> [options]";
@@ -94,7 +95,6 @@ interface SpawnArgs {
   kind: string | undefined;
   agent: string | undefined;
   label: string | undefined;
-  body: string;
   cwd: string;
   workspace: string | undefined;
 }
@@ -116,14 +116,13 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   const label = args.label;
   if (!label) fail("--label is required", 2);
 
-  const body = args.body;
   const cwd = args.cwd;
   const workspaceId = args.workspace ?? currentWorkspaceId();
 
   const { client, registry } = buildDeps();
   try {
     const result: SpawnResult = await spawnChild(
-      { kind, agentName, label, cwd, workspaceId, body, passThroughArgs: passthroughArgs(rawArgs) },
+      { kind, agentName, label, cwd, workspaceId, passThroughArgs: passthroughArgs(rawArgs) },
       { client },
     );
     await registry.add({
@@ -159,8 +158,17 @@ async function runPrompt(args: PromptArgs): Promise<void> {
   if (body === undefined) fail("--body is required", 2);
   const { client } = buildDeps();
   // The body arrives already wrapped in <supervisor-agent> by the caller.
-  await client.agentPrompt(paneId, body);
-  emit({ pane_id: paneId, sent: true });
+  try {
+    await deliverPrompt(client, paneId, body, DEFAULT_PROMPT_BOUNDS);
+    emit({ pane_id: paneId, sent: true });
+  } catch (e) {
+    emit(e);
+    fail(
+      isSpawnFailure(e)
+        ? `prompt failed: ${e.message}`
+        : `prompt failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 }
 
 interface WaitArgs {
@@ -219,7 +227,6 @@ const spawn = defineCommand({
     kind: { type: "string", description: "Harness kind (pi|claude)" },
     agent: { type: "string", description: "Agent name (not a path)" },
     label: { type: "string", description: "Tab label" },
-    body: { type: "string", default: "", description: "Task prompt body" },
     cwd: { type: "string", default: process.cwd(), description: "Child working directory" },
     workspace: { type: "string", description: "Workspace id" },
   },

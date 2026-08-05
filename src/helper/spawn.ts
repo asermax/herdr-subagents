@@ -1,16 +1,12 @@
-import type {
-  AgentStatus,
-  HerdrClient,
-  ReadinessResult,
-} from "./herdr-types.js";
+import type { HerdrClient, ReadinessResult } from "./herdr-types.js";
 import { HerdrError } from "./herdr-types.js";
 
-// spawn is a verify-and-repair sequence. Success from `agent start` and
-// `agent prompt` is NOT evidence a child is spawned and addressable. Two
-// observed failures drive every step:
-//   - agent name lost on 2 of 4 spawns        -> verify-and-rename
-//   - first prompt dropped on 7 of 8 cold spins -> verify-delivery, resend
-// Without this, spawn fails most of the time on pi.
+// spawn is a verify-and-repair sequence. Success from `agent start` is NOT
+// evidence a child is spawned and addressable. One observed failure drives
+// the repair step:
+//   - agent name lost on 2 of 4 spawns -> verify-and-rename
+// Prompt delivery verification lives in prompt.ts (the delegate skill's
+// spawn/prompt split): spawn only creates + starts a child.
 
 const GATE = "HERDR_SUBAGENT";
 
@@ -44,7 +40,6 @@ export interface SpawnInput {
   // Parent's cwd — children live in the parent's workspace.
   cwd: string;
   workspaceId: string;
-  body: string;
   // Extra argv forwarded to the child's harness (e.g. --extension, --skill on
   // pi; --plugin-directory on claude). Empty in production. Computed by the
   // caller from the parent's own launch argv (cli.ts).
@@ -152,14 +147,9 @@ export async function spawnChild(
       await verifyAndRename(client, paneId, input.agentName, bounds);
     }
 
-    // 4. Send the task prompt and verify delivery by watching for a status
-    //    change or state-sequence advance within the stall window. No
-    //    transition = dropped, so resend (bounded). This is the 7-of-8 case.
-    await sendPromptWithDelivery(client, paneId, input.body, bounds);
-
     return { pane_id: paneId, tab_id: tabId };
   } catch (e) {
-    // 5. On exhaustion of any bound, close the half-created tab and report.
+    // 4. On exhaustion of any bound, close the half-created tab and report.
     //    Never keep a broken child.
     try {
       await client.tabClose(tabId);
@@ -235,52 +225,6 @@ async function verifyAndRename(
     }
   }
   throw { reason: "name", message: `agent name did not land after ${bounds.maxRenameAttempts} attempts` } satisfies SpawnFailure;
-}
-
-// Step 4: send the task prompt and verify delivery. We watch for an
-// agent-status change OR a state-sequence advance within the stall window.
-// We do NOT use a wait-until-working receipt — it false-negatives on fast
-// turns (working->done can pass before we observe, making a delivered prompt
-// look dropped). No transition in the window = dropped, so resend (bounded).
-async function sendPromptWithDelivery(
-  client: HerdrClient,
-  paneId: string,
-  body: string,
-  bounds: SpawnBounds,
-): Promise<void> {
-  for (let attempt = 0; attempt < bounds.maxPromptAttempts; attempt++) {
-    const before = await client.agentGet(paneId);
-    const fromSeq = before?.state_change_seq ?? 0;
-    await client.agentPrompt(paneId, body);
-
-    // Any of: a status change away from idle/done, or a state-sequence
-    // advance, counts as the prompt landing.
-    const delivered = await waitForDelivery(client, paneId, fromSeq, bounds.deliveryStallMs);
-    if (delivered) return;
-    // No transition in the window -> dropped. Resend.
-  }
-  throw { reason: "delivery", message: `prompt not delivered after ${bounds.maxPromptAttempts} attempts` } satisfies SpawnFailure;
-}
-
-function waitForDelivery(
-  client: HerdrClient,
-  paneId: string,
-  fromSeq: number,
-  stallMs: number,
-): Promise<boolean> {
-  // Watch for working|blocked|done after the prompt. `fromSeq` skips a stale
-  // replay of the pre-prompt state. A `done` here is fine: a fast turn passed
-  // working->done and that is still evidence of delivery.
-  const statuses: AgentStatus[] = ["working", "blocked", "done"];
-  return client
-    .waitForStatus(paneId, statuses, { timeoutMs: stallMs, fromSeq })
-    .then(() => true)
-    .catch((e: unknown) => {
-      if (e instanceof HerdrError && (e.code === "wait_timeout" || e.code === "timeout")) {
-        return false;
-      }
-      throw e;
-    });
 }
 
 export function isSpawnFailure(value: unknown): value is SpawnFailure {
