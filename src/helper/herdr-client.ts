@@ -39,6 +39,23 @@ async function herdr<T>(...args: string[]): Promise<T> {
   const { stdout, stderr, code } = await runCli(args);
   const trimmed = stdout.trim();
   if (trimmed === "") {
+    // herdr writes error envelopes to stderr (not stdout): a stale pane answers
+    // agent_not_found on stderr with empty stdout + exit 1. Parse stderr for a
+    // JSON-RPC { error: { code, message } } envelope so callers see the real
+    // code (e.g. agentGet's agent_not_found catch) instead of a generic
+    // herdr_empty.
+    const errTrimmed = stderr.trim();
+    if (errTrimmed !== "") {
+      try {
+        const errEnv = JSON.parse(errTrimmed) as { error?: { code: string; message: string } };
+        if (errEnv.error) {
+          throw new HerdrError(errEnv.error.code, errEnv.error.message, stderr);
+        }
+      } catch (e) {
+        if (e instanceof HerdrError) throw e;
+        // stderr is not JSON — fall through to herdr_empty.
+      }
+    }
     throw new HerdrError(
       "herdr_empty",
       `herdr ${args.join(" ")} produced no output (exit ${code})`,

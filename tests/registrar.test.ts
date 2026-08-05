@@ -3,17 +3,18 @@ import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-// The registrar is a pure module (no `pi`): it resolves Claude-format
-// `.claude/agents/*.md` definitions, applies precedence and field mapping, and
-// replaces registrations per (source, namespace) rather than accumulating.
-// Tested here at the module seam, then exercised through the factory in
-// extension.test.ts (Seam 2).
+// The registrar is a pure module (no `pi`): it resolves agent-definition
+// `.md` files from `.pi/agents/` (scanned recursively, including subdirectories
+// like `cc-plugins/`) and `.claude/agents/`, applies precedence and field
+// mapping, and exposes a name lookup. No event bus — the filesystem is the
+// shared medium with pi-cc-plugins.
 //
-// Canonical Claude frontmatter fields (research claude-code-surface.md):
+// Canonical Claude frontmatter fields:
 //   name, description (required); tools, disallowedTools, model, effort,
 //   maxTurns, skills, mcpServers, hooks, memory, background, isolation, color.
+//   package (pi-cc-plugins converter → namespace).
 
-import { createRegistrar, resolveAgents } from "../src/extension/registrar.js";
+import { resolveAgents, resolveAgentByName } from "../src/extension/registrar.js";
 
 /** A self-contained temp project: projectRoot with .claude/agents + .pi/agents. */
 interface Fixture {
@@ -293,124 +294,110 @@ describe("resolveAgents — field mapping", () => {
   });
 });
 
-describe("registrar — replace per (source, namespace)", () => {
-  it("starts empty", () => {
-    const registrar = createRegistrar();
-    expect(registrar.list()).toEqual([]);
+describe("resolveAgents — recursive scan + package namespace", () => {
+  let fx: Fixture;
+
+  beforeEach(() => {
+    fx = makeFixture();
+  });
+  afterEach(() => {
+    fx.cleanup();
   });
 
-  it("a bus registration with one path registers that agent", () => {
-    const fx = makeFixture();
-    try {
-      const path = writeAgent(join(fx.root, "pkg", "agents"), "researcher.md", "name: researcher\ndescription: digs");
+  it("discovers agents in subdirectories of .pi/agents (e.g. cc-plugins/)", () => {
+    writeAgent(
+      join(fx.root, ".pi", "agents", "cc-plugins"),
+      "superpowers--searcher.md",
+      "name: searcher\ndescription: searches docs\npackage: superpowers",
+    );
 
-      const registrar = createRegistrar();
-      registrar.register({
-        version: 1,
-        paths: [path],
-        namespace: "my-plugin",
-        source: "package",
-      });
+    const { agents } = resolveAgents({ cwd: fx.root });
 
-      expect(registrar.list()).toHaveLength(1);
-      expect(registrar.list()[0]!.name).toBe("researcher");
-      expect(registrar.list()[0]!.namespace).toBe("my-plugin");
-      expect(registrar.list()[0]!.source).toBe("package");
-    } finally {
-      fx.cleanup();
-    }
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.name).toBe("searcher");
   });
 
-  it("replaces per (source, namespace) — a second emit for the same key drops the first set", () => {
-    // A session switch drops the previous project's agents and picks up the new
-    // ones with no staleness. Registrations REPLACE per (source, namespace)
-    // rather than accumulating.
-    const fx = makeFixture();
-    try {
-      const pathV1 = writeAgent(join(fx.root, "v1", "agents"), "a.md", "name: alpha\ndescription: v1");
-      const pathV2 = writeAgent(join(fx.root, "v2", "agents"), "b.md", "name: beta\ndescription: v2");
+  it("reads the package frontmatter field as the namespace", () => {
+    writeAgent(
+      join(fx.root, ".pi", "agents", "cc-plugins"),
+      "superpowers--searcher.md",
+      "name: searcher\ndescription: searches docs\npackage: superpowers",
+    );
 
-      const registrar = createRegistrar();
-      registrar.register({ version: 1, paths: [pathV1], namespace: "", source: "project" });
-      expect(registrar.list().map((a) => a.name)).toEqual(["alpha"]);
+    const { agents } = resolveAgents({ cwd: fx.root });
 
-      registrar.register({ version: 1, paths: [pathV2], namespace: "", source: "project" });
-      expect(registrar.list().map((a) => a.name)).toEqual(["beta"]);
-    } finally {
-      fx.cleanup();
-    }
+    expect(agents[0]!.namespace).toBe("superpowers");
   });
 
-  it("different (source, namespace) keys accumulate independently", () => {
-    const fx = makeFixture();
-    try {
-      const projectPath = writeAgent(join(fx.root, "p", "agents"), "a.md", "name: alpha\ndescription: p");
-      const pkgPath = writeAgent(join(fx.root, "pkg", "agents"), "b.md", "name: beta\ndescription: pkg");
+  it("agents without a package field are bare (empty namespace)", () => {
+    writeAgent(join(fx.root, ".claude", "agents"), "reviewer.md", BASE_FM);
 
-      const registrar = createRegistrar();
-      registrar.register({ version: 1, paths: [projectPath], namespace: "", source: "project" });
-      registrar.register({ version: 1, paths: [pkgPath], namespace: "plugin", source: "package" });
+    const { agents } = resolveAgents({ cwd: fx.root });
 
-      const names = registrar.list().map((a) => a.name).sort();
-      expect(names).toEqual(["alpha", "beta"]);
-    } finally {
-      fx.cleanup();
-    }
+    expect(agents[0]!.namespace).toBe("");
   });
 
-  it("same qualified name under two sources: higher rank wins at lookup", () => {
-    // Source maps onto the precedence rank. When the same qualified name is
-    // registered under two sources, the higher-rank source wins.
-    const fx = makeFixture();
-    try {
-      const pkgPath = writeAgent(join(fx.root, "pkg"), "r.md", "name: dup\ndescription: package copy");
-      const projPath = writeAgent(join(fx.root, "proj"), "r.md", "name: dup\ndescription: project copy");
+  it("namespaced agents from different packages coexist without collision", () => {
+    writeAgent(
+      join(fx.root, ".pi", "agents", "cc-plugins"),
+      "alpha--dup.md",
+      "name: dup\ndescription: alpha copy\npackage: alpha",
+    );
+    writeAgent(
+      join(fx.root, ".pi", "agents", "cc-plugins"),
+      "beta--dup.md",
+      "name: dup\ndescription: beta copy\npackage: beta",
+    );
 
-      const registrar = createRegistrar();
-      // Both standalone (empty namespace) under the bare name "dup": project
-      // outranks package.
-      registrar.register({ version: 1, paths: [pkgPath], namespace: "", source: "package" });
-      registrar.register({ version: 1, paths: [projPath], namespace: "", source: "project" });
+    const { agents } = resolveAgents({ cwd: fx.root });
 
-      const agent = registrar.resolve("dup");
-      expect(agent?.description).toBe("project copy");
-    } finally {
-      fx.cleanup();
-    }
+    expect(agents).toHaveLength(2);
+    const ns = agents.map((a) => a.namespace).sort();
+    expect(ns).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("resolveAgentByName", () => {
+  let fx: Fixture;
+
+  beforeEach(() => {
+    fx = makeFixture();
+  });
+  afterEach(() => {
+    fx.cleanup();
   });
 
-  it("a namespaced plugin agent does not shadow a standalone agent of the same bare name", () => {
-    const fx = makeFixture();
-    try {
-      const standalonePath = writeAgent(join(fx.root, "p"), "r.md", "name: dup\ndescription: standalone");
-      const pluginPath = writeAgent(join(fx.root, "pkg"), "r.md", "name: dup\ndescription: plugin copy");
+  it("matches a bare name when the agent has no namespace", () => {
+    writeAgent(join(fx.root, ".claude", "agents"), "reviewer.md", BASE_FM);
+    const { agents } = resolveAgents({ cwd: fx.root });
 
-      const registrar = createRegistrar();
-      registrar.register({ version: 1, paths: [standalonePath], namespace: "", source: "project" });
-      registrar.register({ version: 1, paths: [pluginPath], namespace: "my-plugin", source: "package" });
-
-      // Distinct identities — both resolve under their own qualified name.
-      expect(registrar.resolve("dup")?.description).toBe("standalone");
-      expect(registrar.resolve("my-plugin:dup")?.description).toBe("plugin copy");
-      expect(registrar.list()).toHaveLength(2);
-    } finally {
-      fx.cleanup();
-    }
+    expect(resolveAgentByName(agents, "reviewer")?.description).toBe("reviews code");
   });
 
-  it("a namespaced plugin agent resolves only by its prefixed name", () => {
-    const fx = makeFixture();
-    try {
-      const path = writeAgent(join(fx.root, "pkg"), "r.md", "name: researcher\ndescription: plugin agent");
+  it("matches a qualified namespace:name", () => {
+    writeAgent(
+      join(fx.root, ".pi", "agents", "cc-plugins"),
+      "superpowers--searcher.md",
+      "name: searcher\ndescription: qualified\npackage: superpowers",
+    );
+    const { agents } = resolveAgents({ cwd: fx.root });
 
-      const registrar = createRegistrar();
-      registrar.register({ version: 1, paths: [path], namespace: "my-plugin", source: "package" });
+    expect(resolveAgentByName(agents, "superpowers:searcher")?.description).toBe("qualified");
+  });
 
-      // Plugin-shipped agents are namespaced and require the prefix.
-      expect(registrar.resolve("researcher")).toBeUndefined();
-      expect(registrar.resolve("my-plugin:researcher")?.description).toBe("plugin agent");
-    } finally {
-      fx.cleanup();
-    }
+  it("falls back to bare-name match for a namespaced agent", () => {
+    writeAgent(
+      join(fx.root, ".pi", "agents", "cc-plugins"),
+      "superpowers--searcher.md",
+      "name: searcher\ndescription: fallback\npackage: superpowers",
+    );
+    const { agents } = resolveAgents({ cwd: fx.root });
+
+    expect(resolveAgentByName(agents, "searcher")?.description).toBe("fallback");
+  });
+
+  it("returns undefined for an unknown name", () => {
+    const { agents } = resolveAgents({ cwd: fx.root });
+    expect(resolveAgentByName(agents, "ghost")).toBeUndefined();
   });
 });

@@ -111,17 +111,28 @@ export class Registry {
   }
 
   // Lists every tracked child. Each entry is probed against herdr: if the pane
-  // no longer resolves, the entry is marked stale and never presented as live.
+  // no longer resolves, the entry is marked stale and pruned from the store so
+  // closed children don't accumulate and waste probe subprocesses on every
+  // future list/close.
   async list(): Promise<ListedChild[]> {
     const entries = await this.store.read();
     const result: ListedChild[] = [];
+    const stale: string[] = [];
     for (const entry of Object.values(entries)) {
       const snap = await this.probe(entry.pane_id);
       if (snap === null) {
         result.push({ ...entry, stale: true });
+        stale.push(entry.pane_id);
       } else {
         result.push({ ...entry, status: snap.agent_status, stale: false });
       }
+    }
+    if (stale.length > 0) {
+      await this.serialized(async () => {
+        const current = await this.store.read();
+        for (const paneId of stale) delete current[paneId];
+        await this.store.write(current);
+      });
     }
     return result;
   }

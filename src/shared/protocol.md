@@ -37,7 +37,7 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 ```
 
 - `--kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
-- `--agent <name>` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in `.claude/agents/*.md`, never a path.
+- `--agent <name>` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in `.claude/agents/*.md` or `.pi/agents/**/*.md` (pi-cc-plugins writes agents there), never a path.
 - The label is final; a child never renames its own tab.
 
 `{{helper}} spawn` returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the helper closes the half-created tab and reports; surface that to the human rather than retrying blindly.

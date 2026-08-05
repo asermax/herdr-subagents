@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { resolve, join } from "node:path";
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 // Seam 2: the extension factory with a fake `pi`.
@@ -13,24 +13,23 @@ import { tmpdir } from "node:os";
 // replace-per-(source,namespace)), and the `pi.events` presence handshake. The
 // parent-side watcher registers into the same factory later.
 
-import extension, { getHandle, PROVIDER_READY, PROVIDER_READY_REQUEST, REGISTER } from "../src/extension/index.js";
+import extension, { _setResolveCwd } from "../src/extension/index.js";
 
 const ONBOARDING_PATH = resolve(import.meta.dirname, "..", "src", "shared", "onboarding.md");
 
-/** Read the factory's in-process handle (registrar + provider-ready flag). */
-function handle() {
-  const h = getHandle();
-  if (!h) throw new Error("extension handle not initialised");
-  return h;
+/** Write a Claude-format agent file into a temp project's .claude/agents. */
+function makeAgentProject(frontmatter: string, body = ""): string {
+  const root = mkdtempSync(join(tmpdir(), "herdr-fs-agent-"));
+  mkdirSync(join(root, ".claude", "agents"), { recursive: true });
+  writeFileSync(join(root, ".claude", "agents", "agent.md"), `---\n${frontmatter}\n---\n${body}`);
+  return root;
 }
 
-/** Write a Claude-format agent file under a fresh temp dir; return its path. */
-function writeBusAgent(file: string, frontmatter: string, body = ""): string {
-  const dir = mkdtempSync(join(tmpdir(), "herdr-bus-agent-"));
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, file);
-  writeFileSync(path, `---\n${frontmatter}\n---\n${body}`);
-  return path;
+/** Write + register an agent from the filesystem, returning a cleanup fn. */
+function setupFsAgent(frontmatter: string, body = ""): () => void {
+  const root = makeAgentProject(frontmatter, body);
+  _setResolveCwd(root);
+  return () => rmSync(root, { recursive: true, force: true });
 }
 
 /** A handler captured by the fake pi, for either a lifecycle event or a bus channel. */
@@ -332,14 +331,9 @@ describe("before_agent_start: --agent consumption", () => {
     });
   }
 
-  /** Register one standalone agent over the bus so the registrar resolves it. */
-  function registerAgent(pi: FakePi, file: string, frontmatter: string, body = ""): void {
-    pi.busHandlers.get(REGISTER)!({
-      version: 1,
-      paths: [writeBusAgent(file, frontmatter, body)],
-      namespace: "",
-      source: "project",
-    });
+  /** Write an agent to the filesystem so resolveAgents picks it up. */
+  function registerAgent(_pi: FakePi, _file: string, frontmatter: string, body = ""): void {
+    setupFsAgent(frontmatter, body);
   }
 
   it("appends a resolved agent's system prompt to the base prompt", async () => {
@@ -475,214 +469,6 @@ describe("before_agent_start: --agent consumption", () => {
     } finally {
       spy.mockRestore();
     }
-  });
-});
-
-describe("listener cleanup on shutdown", () => {
-  it("cleans up the handshake's bus subscriptions on session_shutdown", async () => {
-    // The factory subscribes to the presence-handshake channels; each
-    // `pi.events.on` returns an unsubscribe fn pushed into the factory's drain
-    // list. After shutdown the channels must be gone from the fake bus.
-    const pi = createFakePi();
-    extension(pi as any);
-
-    // The provider subscribes to the consumer's request and to registrations.
-    // (It does not subscribe to its own provider-ready signal.)
-    const handshakeChannels = [
-      PROVIDER_READY_REQUEST,
-      REGISTER,
-    ];
-    for (const channel of handshakeChannels) {
-      expect(pi.busHandlers.has(channel)).toBe(true);
-    }
-
-    const shutdown = pi.handlers.get("session_shutdown")!;
-    await expect(shutdown({}, {})).resolves.toBeUndefined();
-
-    for (const channel of handshakeChannels) {
-      expect(pi.busHandlers.has(channel)).toBe(false);
-    }
-
-    // Idempotent: a second shutdown must not throw.
-    await expect(shutdown({}, {})).resolves.toBeUndefined();
-  });
-});
-
-describe("pi.events presence handshake", () => {
-  // Eager emit-both-ways handshake: both sides act at factory time, where
-  // load order is not guaranteed, so each emits its own signal AND listens
-  // for the other's. Whichever loads second triggers the first's listener.
-  // The flag is correct by session start.
-
-  /**
-   * Model the consumer side (pi-cc-plugins): it subscribes to
-   * provider-ready and emits provider-ready-request. When it sees
-   * provider-ready it sets its own flag. Returns the flag so a test can assert
-   * both sides converged regardless of load order.
-   */
-  function createConsumerSide(pi: FakePi): { consumerSawProvider: boolean } {
-    let consumerSawProvider = false;
-    pi.events.on(PROVIDER_READY, () => {
-      const was = consumerSawProvider;
-      consumerSawProvider = true;
-      // Symmetric, idempotent re-emit (guarded to match the provider): a
-      // provider that loaded before us already emitted ready and is waiting
-      // for our request. Re-ask once so it learns we are present.
-      if (!was) pi.events.emit(PROVIDER_READY_REQUEST, {});
-    });
-    pi.events.emit(PROVIDER_READY_REQUEST, {});
-    return {
-      get consumerSawProvider() {
-        return consumerSawProvider;
-      },
-    };
-  }
-
-  it("emits provider-ready at factory time", () => {
-    const pi = createFakePi();
-    extension(pi as any);
-
-    expect(pi.events.emit).toHaveBeenCalledWith(PROVIDER_READY, { version: 1 });
-  });
-
-  it("sets its flag when a consumer announces via provider-ready-request", () => {
-    // The provider learns a consumer is present from its provider-ready-request.
-    // Load order: herdr first, consumer second — the consumer's request trips
-    // the listener herdr registered at factory time.
-    const pi = createFakePi();
-    extension(pi as any);
-    const { herdrProviderReady } = handle();
-    expect(herdrProviderReady()).toBe(false);
-
-    pi.busHandlers.get(PROVIDER_READY_REQUEST)!({});
-
-    expect(herdrProviderReady()).toBe(true);
-  });
-
-  it("re-emits provider-ready when a late consumer sends provider-ready-request", () => {
-    // herdr loaded first; a consumer that loads later missed herdr's initial
-    // provider-ready emit. The consumer emits provider-ready-request, which
-    // makes herdr re-emit provider-ready so the consumer catches up.
-    const pi = createFakePi();
-    extension(pi as any);
-    pi.events.emit.mockClear();
-
-    pi.busHandlers.get(PROVIDER_READY_REQUEST)!({});
-
-    expect(pi.events.emit).toHaveBeenCalledWith(PROVIDER_READY, { version: 1 });
-  });
-
-  it("does not ping-pong: a second request does not re-emit ready", () => {
-    // Once the consumer is known present, further requests must not echo ready
-    // again — otherwise the symmetric re-emit loops forever.
-    const pi = createFakePi();
-    extension(pi as any);
-    pi.busHandlers.get(PROVIDER_READY_REQUEST)!({});
-    pi.events.emit.mockClear();
-
-    pi.busHandlers.get(PROVIDER_READY_REQUEST)!({});
-
-    expect(pi.events.emit).not.toHaveBeenCalled();
-  });
-
-  it("converges in EITHER load order: herdr-first", () => {
-    // herdr loads first: emits ready, registers a request listener.
-    // consumer loads second: emits request (herdr's listener sets herdr's flag
-    // and re-emits ready), and its ready listener catches herdr's ready.
-    const pi = createFakePi();
-    extension(pi as any);
-    const { herdrProviderReady } = handle();
-    const consumer = createConsumerSide(pi);
-
-    expect(consumer.consumerSawProvider).toBe(true);
-    expect(herdrProviderReady()).toBe(true);
-  });
-
-  it("converges in EITHER load order: consumer-first", () => {
-    // Consumer loads first: emits provider-ready-request (no listener yet, so
-    // lost) and registers a ready listener that re-asks once. herdr loads
-    // second: emits ready (consumer sees it and re-asks), and herdr's request
-    // listener catches the re-ask — so both flags converge.
-    const pi = createFakePi();
-
-    // Consumer side first.
-    let consumerSawProvider = false;
-    pi.events.on(PROVIDER_READY, () => {
-      const was = consumerSawProvider;
-      consumerSawProvider = true;
-      if (!was) pi.events.emit(PROVIDER_READY_REQUEST, {});
-    });
-    pi.events.emit(PROVIDER_READY_REQUEST, {});
-
-    // Now herdr loads.
-    extension(pi as any);
-    const { herdrProviderReady } = handle();
-
-    expect(consumerSawProvider).toBe(true);
-    expect(herdrProviderReady()).toBe(true);
-  });
-});
-
-describe("pi.events:register — registrar wiring", () => {
-  it("a register event feeds the registrar and the agent becomes resolvable", () => {
-    const pi = createFakePi();
-    extension(pi as any);
-    const { registrar } = handle();
-
-    expect(registrar.list()).toEqual([]);
-
-    pi.busHandlers.get(REGISTER)!({
-      version: 1,
-      paths: [writeBusAgent("reviewer.md", "name: reviewer\ndescription: digs")],
-      namespace: "my-plugin",
-      source: "package",
-    });
-
-    expect(registrar.list()).toHaveLength(1);
-    expect(registrar.list()[0]!.name).toBe("reviewer");
-  });
-
-  it("replaces per (source, namespace): a second emit for the same key drops the first set", () => {
-    const pi = createFakePi();
-    extension(pi as any);
-    const { registrar } = handle();
-
-    pi.busHandlers.get(REGISTER)!({
-      version: 1,
-      paths: [writeBusAgent("a.md", "name: alpha\ndescription: v1")],
-      namespace: "",
-      source: "project",
-    });
-    expect(registrar.list().map((a) => a.name)).toEqual(["alpha"]);
-
-    pi.busHandlers.get(REGISTER)!({
-      version: 1,
-      paths: [writeBusAgent("b.md", "name: beta\ndescription: v2")],
-      namespace: "",
-      source: "project",
-    });
-    expect(registrar.list().map((a) => a.name)).toEqual(["beta"]); // no accumulation
-  });
-
-  it("different (source, namespace) keys accumulate", () => {
-    const pi = createFakePi();
-    extension(pi as any);
-    const { registrar } = handle();
-
-    pi.busHandlers.get(REGISTER)!({
-      version: 1,
-      paths: [writeBusAgent("a.md", "name: alpha\ndescription: p")],
-      namespace: "",
-      source: "project",
-    });
-    pi.busHandlers.get(REGISTER)!({
-      version: 1,
-      paths: [writeBusAgent("b.md", "name: beta\ndescription: pkg")],
-      namespace: "plugin",
-      source: "package",
-    });
-
-    expect(registrar.list().map((a) => a.name).sort()).toEqual(["alpha", "beta"]);
   });
 });
 

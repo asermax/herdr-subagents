@@ -1,28 +1,18 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, resolve, isAbsolute } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 
 // Agent-resolution role of the pi extension.
 //
 // `.claude/agents/*.md` is the canonical agent-definition format for both
 // harnesses; pi does not scan it natively. This module resolves those files on
-// pi, applies the field mapping, and exposes a registrar that `pi-cc-plugins`
-// (or any other extension) feeds over the `pi.events` bus. No conversion step:
-// the files are read as-is.
-//
-// The extension reads pi-native directories (`.pi/agents`, `.claude/agents`)
-// directly; bus registrations replace per (source, namespace) rather than
-// accumulating, so a session switch drops the previous project's agents with no
-// staleness.
+// pi, applies the field mapping, and returns a list that `before_agent_start`
+// looks up by name. pi-cc-plugins (or any agent source) writes converted agents
+// into `.pi/agents/` — this scanner reads them directly. No event bus, no
+// coupling: the filesystem is the shared medium.
 
 /** Where an agent definition came from, ranked low → high. */
-const SOURCE_RANK = {
-  user: 0,
-  package: 1,
-  project: 2,
-} as const;
-
-type Source = keyof typeof SOURCE_RANK;
+type Source = "user" | "project";
 
 /** The agent record after field mapping — the shape pi consumes. */
 export interface AgentRecord {
@@ -61,16 +51,19 @@ const PI_AGENTS = join(".pi", "agents");
 
 /**
  * Resolve agent definitions from pi-native directories under the project cwd
- * and the user home. Precedence (low → high):
+ * and the user home. The `.pi/agents` directories are scanned RECURSIVELY so
+ * agents written by pi-cc-plugins into subdirectories (e.g. `cc-plugins/`) are
+ * discovered. Precedence (low → high, last writer wins):
  *   user/.claude/agents < user/.pi/agents < project/.claude/agents < project/.pi/agents
- * Same name in the SAME directory warns; first wins. Same name across
+ * Same name in the SAME directory tree warns; first wins. Same name across
  * directories is resolved by precedence, silently.
  */
 export function resolveAgents(options: ResolveOptions): ResolveResult {
   const userDir = options.userDir ?? homedir();
   const warnings: string[] = [];
 
-  // Lowest rank first; later entries overwrite earlier ones of the same name.
+  // Lowest rank first; later entries overwrite earlier ones of the same
+  // qualified name.
   const scanOrder: Array<{ dir: string; source: Source }> = [
     { dir: join(userDir, CLAUDE_AGENTS), source: "user" },
     { dir: join(userDir, PI_AGENTS), source: "user" },
@@ -81,17 +74,26 @@ export function resolveAgents(options: ResolveOptions): ResolveResult {
   const byName = new Map<string, AgentRecord>();
   for (const { dir, source } of scanOrder) {
     if (!existsSync(dir)) continue;
-    const loaded = loadDirectory(dir, source, "");
+    const loaded = loadDirectory(dir, source);
     for (const warning of loaded.warnings) warnings.push(warning);
     for (const agent of loaded.agents) {
-      // Higher-rank directories overwrite; same rank is already "first wins"
-      // inside loadDirectory. Across directories the last writer wins, and
-      // scanOrder is sorted low → high, so the highest-rank definition lands.
-      byName.set(agent.name, agent);
+      byName.set(qualifiedName(agent), agent);
     }
   }
 
   return { agents: [...byName.values()], warnings };
+}
+
+/**
+ * Resolve a single agent by name from a resolved list. Tries the qualified name
+ * (`namespace:name`, e.g. `superpowers:documentation-searcher`) first, then
+ * falls back to a bare name match.
+ */
+export function resolveAgentByName(
+  agents: AgentRecord[],
+  name: string,
+): AgentRecord | undefined {
+  return agents.find((a) => qualifiedName(a) === name) ?? agents.find((a) => a.name === name);
 }
 
 interface LoadResult {
@@ -99,61 +101,56 @@ interface LoadResult {
   warnings: string[];
 }
 
-/** Load every `*.md` in one directory, applying same-name-first-wins. */
-function loadDirectory(dir: string, source: Source, namespace: string): LoadResult {
+/** Recursively collect every `*.md` file path under `dir` (sorted, stable). */
+function walkMdFiles(dir: string, out: string[] = []): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const name of entries.sort()) {
+    const path = join(dir, name);
+    let st: { isDirectory(): boolean; isFile(): boolean };
+    try {
+      st = statSync(path);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      walkMdFiles(path, out);
+    } else if (st.isFile() && name.endsWith(".md")) {
+      out.push(path);
+    }
+  }
+  return out;
+}
+
+/** Load every `*.md` in one directory tree, applying same-name-first-wins. */
+function loadDirectory(dir: string, source: Source): LoadResult {
   const agents: AgentRecord[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();
 
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(dir)
-      .filter((name) => name.endsWith(".md"))
-      .sort();
-  } catch {
-    return { agents, warnings };
-  }
-
-  for (const name of entries) {
-    const path = join(dir, name);
-    let isFile = false;
-    try {
-      isFile = statSync(path).isFile();
-    } catch {
-      continue;
-    }
-    if (!isFile) continue;
-
+  for (const path of walkMdFiles(dir)) {
     const parsed = parseAgentFile(path);
     if (!parsed) continue;
 
-    if (seen.has(parsed.record.name)) {
-      warnings.push(
-        `agent "${parsed.record.name}" defined more than once in ${dir}; keeping the first`,
-      );
+    const agent: AgentRecord = { ...parsed, source };
+    const qname = qualifiedName(agent);
+    if (seen.has(qname)) {
+      warnings.push(`agent "${qname}" defined more than once in ${dir}; keeping the first`);
       continue;
     }
-    seen.add(parsed.record.name);
-    agents.push({ ...parsed.record, source, namespace });
+    seen.add(qname);
+    agents.push(agent);
   }
 
   return { agents, warnings };
 }
 
-/** A bus registration payload: absolute paths + namespace + source. */
-export interface RegisterPayload {
-  version: 1;
-  paths: string[];
-  namespace: string;
-  source: Source;
-}
-
-interface ParsedFile {
-  record: Omit<AgentRecord, "source" | "namespace">;
-}
-
-/** Parse one Claude-format file into a mapped agent record (minus origin). */
-function parseAgentFile(path: string): ParsedFile | null {
+/** Parse one agent-definition file into a mapped record (minus source). */
+function parseAgentFile(path: string): Omit<AgentRecord, "source"> | null {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -166,9 +163,14 @@ function parseAgentFile(path: string): ParsedFile | null {
   const description = stringField(frontmatter, "description");
   if (!name || !description) return null;
 
-  const record: Omit<AgentRecord, "source" | "namespace"> = {
+  // The `package` field (written by pi-cc-plugins' converter) namespaces the
+  // agent: `superpowers:documentation-searcher`. Absent → bare name.
+  const namespace = stringField(frontmatter, "package") ?? "";
+
+  const record: Omit<AgentRecord, "source"> = {
     name,
     description,
+    namespace,
     path,
     systemPromptMode: "append",
     inheritProjectContext: true,
@@ -187,93 +189,12 @@ function parseAgentFile(path: string): ParsedFile | null {
   if (body.length > 0) record.systemPrompt = body;
 
   // Dropped silently: tools, disallowedTools, model, mcpServers,
-  // hooks, memory, background, isolation, color. They are parsed and ignored.
-  return { record };
+  // hooks, memory, background, isolation, color, systemPromptMode,
+  // inheritProjectContext, inheritSkills (pi-subagents converter fields).
+  return record;
 }
 
-/**
- * The registrar: a name → record map, plus replace-per-(source,namespace)
- * storage for bus registrations. Native directory resolution (resolveAgents)
- * and bus registrations merge at resolve() time under the precedence rank.
- */
-export interface Registrar {
-  /** All currently-known agents, precedence-merged, highest rank per name. */
-  list(): AgentRecord[];
-  /** Resolve a single agent by name; namespaced agents need the `ns:name` form. */
-  resolve(name: string): AgentRecord | undefined;
-  /** Replace the agents for one (source, namespace) key. */
-  register(payload: RegisterPayload): void;
-}
-
-const KEY_SEP = "\u0000";
-
-function busKey(source: Source, namespace: string): string {
-  return `${SOURCE_RANK[source]}${KEY_SEP}${namespace}`;
-}
-
-export function createRegistrar(): Registrar {
-  // source → namespace → name → record. Replacing a (source, namespace) drops
-  // the previous set entirely (no staleness on session switch).
-  const bus = new Map<string, Map<string, AgentRecord>>();
-
-  return {
-    list(): AgentRecord[] {
-      return mergeByRank(bus);
-    },
-
-    resolve(name: string): AgentRecord | undefined {
-      return mergeByRank(bus).find((a) => qualifiedName(a) === name);
-    },
-
-    register(payload: RegisterPayload): void {
-      const key = busKey(payload.source, payload.namespace);
-      const next = new Map<string, AgentRecord>();
-      for (const raw of payload.paths) {
-        const path = isAbsolute(raw) ? raw : resolve(raw);
-        const parsed = parseAgentFile(path);
-        if (!parsed) continue;
-        const agent: AgentRecord = {
-          ...parsed.record,
-          source: payload.source,
-          namespace: payload.namespace,
-        };
-        // First wins within a (source, namespace) batch.
-        const qualified = qualifiedName(agent);
-        if (next.has(qualified)) continue;
-        next.set(qualified, agent);
-      }
-      bus.set(key, next);
-    },
-  };
-}
-
-/** Merge every bus (source, namespace) batch by precedence rank, highest wins. */
-function mergeByRank(bus: Map<string, Map<string, AgentRecord>>): AgentRecord[] {
-  const batches = [...bus.values()].map((m) => [...m.values()]);
-  // Key on the qualified name: a standalone `reviewer` and a plugin's
-  // `my-plugin:reviewer` are distinct identities and must not shadow each
-  // other (plugin-shipped agents are namespaced). Only agents that
-  // share a qualified name compete on the source precedence rank.
-  const byName = new Map<string, AgentRecord>();
-  for (const batch of batches) {
-    for (const agent of batch) {
-      const key = qualifiedName(agent);
-      const existing = byName.get(key);
-      // Higher rank wins; on equal rank the later batch overwrites, so the
-      // last-seen definition of a name lands.
-      if (!existing || rankOf(agent) >= rankOf(existing)) {
-        byName.set(key, agent);
-      }
-    }
-  }
-  return [...byName.values()];
-}
-
-function rankOf(agent: AgentRecord): number {
-  return SOURCE_RANK[agent.source];
-}
-
-/** Bare name for standalone agents, `namespace:name` for plugin-shipped ones. */
+/** Bare name for standalone agents, `namespace:name` for namespaced ones. */
 function qualifiedName(agent: { name: string; namespace: string }): string {
   return agent.namespace ? `${agent.namespace}:${agent.name}` : agent.name;
 }
