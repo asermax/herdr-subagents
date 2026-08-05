@@ -46,7 +46,13 @@ const CLAUDE_HOOKS_JSON = "claude/hooks/hooks.json";
 export function filePlan(harness: Harness): EmitFile[] {
   if (harness === "pi") {
     return [
-      { dest: "skills/delegate.md", type: "substitute", src: PROTOCOL },
+      {
+        dest: "skills/delegate.md",
+        type: "generate",
+        // Frontmatter (name + description) so pi registers the skill; the body
+        // is the shared protocol with tokens substituted for this harness.
+        render: (map) => delegateSkill(map),
+      },
       { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
       // The extension ships as source .ts that pi loads via its tsx loader
       // (matches @asermax/pi-cc-plugins' shape). Token-free, copied verbatim.
@@ -65,9 +71,9 @@ export function filePlan(harness: Harness): EmitFile[] {
     {
       dest: "skills/delegate/SKILL.md",
       type: "generate",
-      // Frontmatter names the skill `/delegate` (research §5: always set `name`
-      // for a generated skill). The body is the shared protocol, substituted.
-      render: (map) => claudeDelegateSkill(map),
+      // Frontmatter names the skill `/delegate`; the body is the shared
+      // protocol, substituted. Both harnesses share the same skill generator.
+      render: (map) => delegateSkill(map),
     },
     { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
     { dest: "hooks/hooks.json", type: "copy", src: CLAUDE_HOOKS_JSON },
@@ -92,7 +98,7 @@ function readSrc(rel: string): string {
   return readFileSync(join(srcDir, rel), "utf8");
 }
 
-function claudeDelegateSkill(map: TokenMap): string {
+function delegateSkill(map: TokenMap): string {
   const frontmatter = [
     "---",
     "name: delegate",
