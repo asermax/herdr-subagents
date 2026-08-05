@@ -4,7 +4,7 @@ Research question: what can a pi extension do that we need, and how do the two
 extensions we are replacing (`pi-subagents`, `pi-intercom`) do it?
 
 This grounds three decisions for our pi package: register a `--agent` flag,
-load agent definitions, and report a subagent's final message to its parent.
+load agent definitions, and how the parent collects a child's result.
 
 All paths cite the installed copy under `/usr/lib/node_modules/pi` (upstream
 checkout mirrors it at `/home/agus/workspace/asermax/pi`) and the installed
@@ -110,8 +110,7 @@ const text = getTextContent(lastAssistant);  // join text content blocks
 `pi-subagents` extracts the same thing via `getFinalOutput(messages)` in
 `node_modules/pi-subagents/src/shared/utils.ts` — it scans backward for the
 last assistant message with non-empty text, skipping error stops, and returns
-its full text. That is the exact function to reuse for "report a subagent's
-final message."
+its full text.
 
 ### 1.3 Inject or append system prompt content
 
@@ -177,9 +176,10 @@ background/async run status uses this style of durable entry plus a
 - `ctx.ui.setStatus(key, text)` writes a **footer status line** (the line above
   the input); `ctx.ui.setStatus(key, undefined)` clears it. `ctx.ui` is on the
   handler context (`pi.on(event, (e, ctx) => ctx.ui.setStatus(...))`), not on
-  `pi` directly. herdr-subagents' parent role uses this to summarize every
-  tracked child as one keyed line (`herdr-subagents`), recomputed on each
-  status change and cleared when there are no children. See
+  `pi` directly. `ctx.ui.setWidget(key, lines | undefined)` writes a block
+  **widget above the input**; herdr-subagents' parent role renders every
+  tracked child as one such widget (`herdr-subagents`), recomputed on each
+  status change and cleared when there are no children (ADR-0004). See
   `examples/extensions/status-line.ts`.
 
 ## 2. pi-subagents
@@ -492,27 +492,23 @@ const reply = await replyPromise;   // resolved when a matching reply lands
 
 1. **`--agent` flag:** one `pi.registerFlag("agent", { type: "string" })` call
    in the factory; read with `pi.getFlag("agent")`. No `process.argv`
-   parsing. Same shape as `--fff-mode`.
-2. **Agent definitions:** drop markdown files under `.pi/agents/herdr/*.md`
-   (or ship them in the package's `agents/`). Discovery is recursive and the
-   frontmatter schema (§2.2) already covers model, tools, system prompt, and
-   context inheritance — we inherit it for free. Files need `name` +
-   `description`.
-3. **Report the final message to the parent:** hook `agent_settled` (or
-   `agent_end`), then `getFinalOutput(ctx.session messages)` — exactly what
-   pi-subagents does. For the transport, see (4).
-4. **Reuse vs replace pi-intercom's broker.** **Reuse.** The broker already
-   solves the hard parts we would otherwise rebuild: a length-prefixed Unix
-   socket with reconnection, name/id addressing, a live session roster,
-   `inboundTrigger` to turn a message into a recipient turn, and a battle-tested
-   `ask` with reply tracking and cancellation. The parent/child wiring is
-   already specified by the env contract in §3.4 — if herdr-subagents sets
-   `PI_SUBAGENT_ORCHESTRATOR_TARGET` + run/agent/index when it spawns a herdr
-   tab, pi-intercom (or pi-subagents' native channel) will expose
-   `contact_supervisor` in the child with zero extra code. What to **drop**:
-   pi-intercom's interactive confirm-send, presence/context% heartbeats, and
-   the extension-bus features are more than a focused report channel needs,
-   but they are opt-in/idle and cost little to leave running. The one thing to
-   evaluate is whether herdr's own pane addressing (e.g. `w1Y:p2`) should be
-   the intercom `name` so the parent can target a tab directly — that is a
-   config choice, not a protocol change.
+   parsing. Same shape as `--fff-mode`. (Built: `src/extension/index.ts`.)
+2. **Agent definitions:** the extension reads `.pi/agents/` and
+   `.claude/agents/` directly from disk (no event bus, no coupling to
+   pi-cc-plugins) and applies the matched agent's system prompt at
+   `before_agent_start`. Discovery is recursive; the frontmatter schema (§2.2)
+   covers model, tools, system prompt, and context inheritance. Files need
+   `name` + `description`. (Built: `src/extension/registrar.ts`.)
+3. **Delivering a child's result is parent-side, not a hook.** A child does
+   nothing to report. When a child reaches a terminal status, the parent reads
+   the child's own session log (`agent_session`: a `.jsonl` path on pi, a
+   session uuid on claude) and extracts the last assistant message itself.
+   There is no `agent_settled` / `getFinalOutput` handoff and no child-to-parent
+   push — that would reintroduce the broker shape the tabs decision deleted.
+   See ADR-0002.
+4. **No broker.** Children are herdr tabs, not subprocesses or intercom
+   sessions, so pi-intercom's broker is not used. The back-channel is the tags:
+   a child ends its turn with `<subagent-ask>`, which rides the same
+   parent-side collect path up; the parent replies with a tagged
+   `<supervisor-agent>` prompt. The child is parent-agnostic and never learns
+   its parent's identity. See ADR-0001 and ADR-0003.

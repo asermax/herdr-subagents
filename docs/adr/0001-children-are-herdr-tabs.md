@@ -8,6 +8,6 @@ A child is a foreground interactive pane running a real harness, created with `h
 
 ## Consequences
 
-- The human-in-the-tab safety pattern exists at all: under a hard no-focus invariant, a focus event on a child's tab is a human, which is what disqualifies the child from being closed by its parent.
+- The human-in-the-tab safety pattern rests on a no-focus invariant: the parent never focuses a child's tab, so a focus event on a child's tab is a human. That is what makes an untagged message reaching a child mean the human is steering it directly. (`helper close` does not yet block a focused tab, so the parent must check the fleet before closing.)
 - Nesting works to any depth because a child is just another tab that can create tabs in its own workspace.
 - Print mode and detached mode are both rejected: print exits and takes the tab with it; detached starts claude's own supervisor rather than a herdr pane.

@@ -8,7 +8,7 @@ import { registerParentRole } from "./parent-role.js";
 // herdr-subagents pi extension. This slice owns agent-resolution — reading
 // `.pi/agents/` and `.claude/agents/` directly (no event bus, no coupling to
 // pi-cc-plugins) — plus the child-side onboarding injection. The parent-side
-// footer status line + terminal-state wake lives in parent-role.ts. No herdr
+// status widget + terminal-state wake lives in parent-role.ts. No herdr
 // socket client lives here — the helper is the only one.
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -126,7 +126,7 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
   });
 
   // Parent-side role: spawn `helper watch`, summarize tracked children into
-  // one footer status line, and wake on terminal-only states. Pushes its
+  // one status widget above the input, and wake on terminal-only states. Pushes its
   // teardown into the drain list so session_shutdown stops the watcher.
   unsubs.push(registerParentRole(pi));
 }

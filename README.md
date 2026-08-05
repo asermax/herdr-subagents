@@ -32,7 +32,7 @@ two (spec §9):
 | Token        | Value                                                                                  |
 | ------------ | -------------------------------------------------------------------------------------- |
 | `{{wake}}`   | The per-harness wake fragment (`src/skills/delegate/{pi,claude}.md`).                  |
-| `{{helper}}` | The helper's absolute path, resolved per artifact root at build time (shipped by #17). |
+| `{{helper}}` | The helper's absolute path, resolved per artifact root at build time. |
 
 The build:
 

@@ -7,5 +7,5 @@ We rejected the earlier design of one TUI status card per child via `pi.appendEn
 ## Consequences
 
 - The parent's watch callback runs outside a handler and so has no `ctx`; it captures `ctx.ui` once at `session_start` and reuses that sink for the session.
-- `gone` is the only stream-driven removal: a collected-and-closed child lingers at its last status (`done`) until it goes `gone`, because `helper watch` goes quiet on `pane.closed` rather than emitting a removal. The widget is a live summary, not a durable registry view — `helper list` remains the durable backstop.
+- `gone` is the only watch-driven removal. `helper watch` polls each tracked child's `agent.get` and emits a `gone` when a pane no longer resolves (crash, or a herdr restart that renumbered it). A child the parent closed via `helper close` is removed from the registry first, so it drops from the widget immediately with no `gone`. The widget is a live summary, not a durable registry view — `helper list` remains the durable backstop.
 - The terminal-state wake (`pi.sendMessage` with `triggerTurn`) is unchanged and separate from the status line.

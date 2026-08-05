@@ -2,9 +2,11 @@
 
 Research for the herdr-subagents system, where a parent coding agent launches
 `claude` as a fresh herdr tab with an agent definition, briefs it, and collects
-its final message. We ship the parent-side skill and the child-side report
-handoff as a Claude Code plugin. `.claude/agents/*.md` is the canonical
-agent-definition format for **both** claude and pi, so this pins its schema.
+its final message. We ship the parent-facing delegate skill and the child's
+onboarding injection as a Claude Code plugin; collection is parent-side (the
+parent reads the child's transcript, not a hook push). `.claude/agents/*.md` is
+the canonical agent-definition format for **both** claude and pi, so this pins
+its schema.
 
 **Sources.** Installed binary `claude` v2.1.220 at `/usr/bin/claude`, the local
 config tree under `/home/agus/.claude/` (agents, hooks, plugins, settings), and
@@ -513,17 +515,24 @@ A few things constrain a skill whose body is produced from a shared source
 - **Agent schema**: pin on the live-docs table in §2 (`name`, `description`
   required; rich optional fields). It works identically for claude (`--agent`,
   `.claude/agents/`) and pi, and is the shared contract.
-- **Child report handoff**: the `Stop` hook delivers the child's final message
-  inline as `last_assistant_message` (**verified**) — no transcript parsing
-  needed. A `SessionStart` hook can register a child's session id; a sibling
-  `Stop` hook can ship the report the same way. Alternatively, use
-  synchronous `Agent`-tool delegation and the report returns as the tool result.
-- **Plugin packaging**: ship `.claude-plugin/plugin.json` + `agents/` +
-  `hooks/hooks.json` + `skills/`. For a generated skill, materialize it into the
-  plugin at build time (cache-copy + symlink rules forbid `../` references) and
-  always set `name` in the skill frontmatter. `--plugin-dir` is the dev/load
-  path herdr can point at directly.
-- **Background completion does not auto-inject into a parent agent**: there is no
-  built-in cross-session injection. Use `Stop`/`SubagentStop` hooks (carrying
-  `last_assistant_message`) or synchronous delegation to make a child's report
-  arrive.
+- **Child report handoff is parent-side, not a hook.** The `Stop` hook *does*
+  carry `last_assistant_message` inline (**verified**, §3), but the shipped
+  design does not use it: collection is entirely parent-side. When a child
+  reaches a terminal status, the parent resolves the child's transcript
+  (`~/.claude/projects/<project>/<uuid>.jsonl`, from herdr's `agent_session`)
+  and extracts the last complete assistant message itself. The plugin ships
+  only a `SessionStart` onboarding hook; the `Stop` handoff was deliberately
+  dropped (ADR-0002).
+- **Plugin packaging**: ship `.claude-plugin/plugin.json` + `hooks/hooks.json`
+  (SessionStart onboarding only) + `skills/delegate/SKILL.md` +
+  `references/onboarding.md`. No `agents/` directory — agents live in the
+  consuming project. For the generated skill, materialize it into the plugin
+  at build time (cache-copy + symlink rules forbid `../` references) and always
+  set `name` in the skill frontmatter. `--plugin-dir` is the dev/load path
+  herdr points at directly.
+- **Background completion does not auto-inject into a parent agent**: there is
+  no built-in cross-session injection. On claude the parent arms the wake
+  itself — it launches `helper wait <pane_id>` as a background task whose
+  completion reminder brings it back to collect (the pi extension auto-wakes
+  via its own watcher). The child's report still arrives through parent-side
+  collect, never through a hook push.

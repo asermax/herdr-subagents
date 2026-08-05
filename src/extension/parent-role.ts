@@ -72,8 +72,8 @@ export type WakeSender = (
   options: { triggerTurn: boolean },
 ) => void;
 
-// Tracked-children state for one session. `processLine` mutates it; the footer
-// line is recomputed from it after every change.
+// Tracked-children state for one session. `processLine` mutates it; the widget
+// is recomputed from it after every change.
 export interface ParentRoleState {
   children: Map<string, ChildStatus>;
 }
@@ -164,7 +164,7 @@ export function registerParentRole(pi: ExtensionAPI): () => void {
   };
 
   // The watch data callback runs outside any handler and so has no `ctx`. The
-  // footer status sink lives on the handler context's `ctx.ui`, so capture it
+  // status-widget sink lives on the handler context's `ctx.ui`, so capture it
   // once at session_start — stable for a single session.
   let ui: StatusSink | undefined;
   pi.on("session_start", (_event, ctx) => {

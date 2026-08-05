@@ -57,7 +57,7 @@ Reading a child's last assistant message and returning it as a structured payloa
 _Avoid_: read, fetch.
 
 **token**:
-A build substitution placeholder in the shared skill source, replaced per harness at build time. Exactly two exist: `{{wake}}` (the content divergence for how a parent is woken) and the helper path (resolved per artifact root). The build errors on any unknown token.
+A build substitution placeholder in the shared skill source, replaced per harness at build time. Exactly two exist: `{{wake}}` (the content divergence for how a parent is woken) and `{{helper}}` (the helper's absolute path, resolved per artifact root at build time). The build errors on any unknown token.
 
 **wake-then-collect**:
 The protocol shape: a wake brings the parent back; the parent then runs collect deliberately. The wake and the payload are deliberately separate so a burst of finishing children cannot flood the parent's context.
@@ -72,9 +72,6 @@ A parent's tracked children, and the human's view of the same as labelled tabs i
 
 **onboarding**:
 Injected content that tells a child it is a child, how to ask its parent, the tag rule, and that it may delegate. Static, present every turn; never a skill the child invokes.
-
-**engaged**:
-A child a human has focused. An engaged child is disqualified from being closed by its parent.
 
 ### herdr-native terms this project builds on
 
