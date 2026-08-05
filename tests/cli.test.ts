@@ -114,3 +114,41 @@ describe("CLI help surface", () => {
     expect(stderr).toMatch(/watch/);
   });
 });
+
+// collect/close/wait/prompt recover their positional id (pane or tab) from
+// argv directly. A double-slice once ate the id, so each printed its usage
+// line and exited 2. With the id present the command must get PAST the usage
+// guard; with no HERDR_SOCKET_PATH it then fails at the socket check (exit 1,
+// no "usage") — the signal the id was extracted.
+describe("CLI positional id extraction", () => {
+  it("collect extracts the pane_id", async () => {
+    const { code, stderr } = await runCli(["collect", "w1Z:p1"], { HERDR_SOCKET_PATH: "" });
+    expect(code).toBe(1);
+    expect(stderr).not.toMatch(/usage/);
+    expect(stderr).toMatch(/HERDR_SOCKET_PATH/);
+  });
+
+  it("close extracts the tab_id", async () => {
+    const { code, stderr } = await runCli(["close", "w1Z:t1"], { HERDR_SOCKET_PATH: "" });
+    expect(code).toBe(1);
+    expect(stderr).not.toMatch(/usage/);
+    expect(stderr).toMatch(/HERDR_SOCKET_PATH/);
+  });
+
+  it("wait extracts the pane_id", async () => {
+    const { code, stderr } = await runCli(["wait", "w1Z:p1"], { HERDR_SOCKET_PATH: "" });
+    expect(code).toBe(1);
+    expect(stderr).not.toMatch(/usage/);
+    expect(stderr).toMatch(/HERDR_SOCKET_PATH/);
+  });
+
+  it("prompt extracts the pane_id (with --body)", async () => {
+    const { code, stderr } = await runCli(
+      ["prompt", "w1Z:p1", "--body", "<supervisor-agent>do it</supervisor-agent>"],
+      { HERDR_SOCKET_PATH: "" },
+    );
+    expect(code).toBe(1);
+    expect(stderr).not.toMatch(/usage/);
+    expect(stderr).toMatch(/HERDR_SOCKET_PATH/);
+  });
+});

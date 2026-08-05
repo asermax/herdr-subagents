@@ -220,9 +220,10 @@ async function runClose(): Promise<void> {
 }
 
 // The positional argument is the first non-flag token after the subcommand.
+// Callers pass process.argv.slice(2), so argv[0] is already the subcommand;
 // parseArgs consumes flag values, so recover the positional from argv directly.
 function restPositional(argv: string[]): string | undefined {
-  const rest = argv.slice(2).filter((a) => !a.startsWith("--"));
+  const rest = argv.filter((a) => !a.startsWith("--"));
   // The first positional is the subcommand; the second is our argument.
   return rest[1];
 }
