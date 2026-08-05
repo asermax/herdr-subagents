@@ -8,8 +8,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // Parent-side role of the herdr-subagents pi extension. Owns ONLY the bridge
 // between `helper watch` and the parent session:
 //   - spawns `helper watch` once per session
-//   - summarizes every tracked child as ONE footer status line
-//     (ctx.ui.setStatus), recomputed on each change
+//   - summarizes every tracked child as ONE status line rendered as a widget
+//     above the input (ctx.ui.setWidget), recomputed on each change
 //   - on a terminal state (done|gone) forwards a compact wake (pi.sendMessage
 //     with triggerTurn); blocked NEVER wakes
 //
@@ -59,10 +59,10 @@ export interface ChildStatus {
   status: string;
 }
 
-// The footer status surface. `ctx.ui` (ExtensionUIContext) satisfies this; a
-// test passes a plain spy. `setStatus(key, undefined)` clears the line.
+// The status surface. `ctx.ui` (ExtensionUIContext) satisfies this; a
+// test passes a plain spy. `setWidget(key, undefined)` clears the widget.
 export interface StatusSink {
-  setStatus(key: string, text: string | undefined): void;
+  setWidget(key: string, content: string[] | undefined): void;
 }
 
 // Sends the terminal-state wake. Mirrors the slice of ExtensionAPI.sendMessage
@@ -82,15 +82,16 @@ export function createParentRoleState(): ParentRoleState {
   return { children: new Map() };
 }
 
-// The footer line summarizing every tracked child as `name: status`, ordered
+// The status line summarizing every tracked child as `name: status`, ordered
 // by pane id. Returns undefined when there are no children so the caller can
-// clear the line. The name falls back to the pane id when a child has no label.
-export function renderStatusLine(children: Map<string, ChildStatus>): string | undefined {
+// clear the widget. Wrapped in a single-element array for setWidget. The name
+// falls back to the pane id when a child has no label.
+export function renderStatusLine(children: Map<string, ChildStatus>): string[] | undefined {
   if (children.size === 0) return undefined;
   const ordered = [...children.values()].sort((a, b) =>
     a.pane_id < b.pane_id ? -1 : a.pane_id > b.pane_id ? 1 : 0,
   );
-  return ordered.map((c) => `${c.label || c.pane_id}: ${c.status}`).join(" | ");
+  return [ordered.map((c) => `${c.label || c.pane_id}: ${c.status}`).join(" | ")];
 }
 
 // One watch line → one status-line refresh, plus a wake on terminal-only
@@ -127,7 +128,7 @@ export function processLine(
     state.children.set(rec.pane_id, child);
   }
 
-  sink?.setStatus(STATUS_KEY, renderStatusLine(state.children));
+  sink?.setWidget(STATUS_KEY, renderStatusLine(state.children));
 
   if (!TERMINAL.has(status)) return;
 

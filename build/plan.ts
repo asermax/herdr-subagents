@@ -116,7 +116,7 @@ const PI_AGENT_DIRS = `
 
 ## Agent definitions on pi
 
-Agent names you can pass to \`--agent\` are defined as \`.md\` files under \`.pi/agents/\` (scanned recursively). Read that directory to see which agents are available before picking a name.
+Agent names you can pass to \`--agent\` are defined as \`.md\` files under \`.pi/agents/\` (scanned recursively). Run \`ls -R .pi/agents\` to see which agents are available before picking a name.
 `;
 
 function piManifest(version: string): string {

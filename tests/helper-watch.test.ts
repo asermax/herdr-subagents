@@ -211,55 +211,55 @@ describe("parent-role status line", () => {
 
   function setup() {
     const state = createParentRoleState();
-    const setStatus = vi.fn();
-    const sink = { setStatus };
+    const setWidget = vi.fn();
+    const sink = { setWidget };
     const sendWake = vi.fn();
-    return { state, sink, sendWake, setStatus };
+    return { state, sink, sendWake, setWidget };
   }
 
   const line = (pane_id: string, status: string, label = ""): string =>
     JSON.stringify({ pane_id, label, status });
 
-  it("a status change sets a footer line naming the child and its status", () => {
-    const { state, sink, sendWake, setStatus } = setup();
+  it("a status change sets a status widget naming the child and its status", () => {
+    const { state, sink, sendWake, setWidget } = setup();
     processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
 
-    expect(setStatus).toHaveBeenCalledTimes(1);
-    expect(setStatus).toHaveBeenCalledWith(STATUS_KEY, "cleaner: working");
+    expect(setWidget).toHaveBeenCalledTimes(1);
+    expect(setWidget).toHaveBeenCalledWith(STATUS_KEY, ["cleaner: working"]);
   });
 
   it("falls back to the pane id when the child has no label", () => {
-    const { state, sink, sendWake, setStatus } = setup();
+    const { state, sink, sendWake, setWidget } = setup();
     processLine(state, sink, sendWake, line("w1Z:p9", "idle"));
-    expect(setStatus).toHaveBeenCalledWith(STATUS_KEY, "w1Z:p9: idle");
+    expect(setWidget).toHaveBeenCalledWith(STATUS_KEY, ["w1Z:p9: idle"]);
   });
 
   it("summarizes every tracked child in one line, ordered by pane id", () => {
-    const { state, sink, sendWake, setStatus } = setup();
+    const { state, sink, sendWake, setWidget } = setup();
     processLine(state, sink, sendWake, line("w1Z:p2", "done", "reviewer"));
     processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
 
-    expect(setStatus).toHaveBeenLastCalledWith(
+    expect(setWidget).toHaveBeenLastCalledWith(
       STATUS_KEY,
-      "cleaner: working | reviewer: done",
+      ["cleaner: working | reviewer: done"],
     );
   });
 
-  it("clears the line (setStatus undefined) when no children remain", () => {
-    const { state, sink, sendWake, setStatus } = setup();
+  it("clears the widget (setWidget undefined) when no children remain", () => {
+    const { state, sink, sendWake, setWidget } = setup();
     processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
-    expect(setStatus).toHaveBeenLastCalledWith(STATUS_KEY, "cleaner: working");
+    expect(setWidget).toHaveBeenLastCalledWith(STATUS_KEY, ["cleaner: working"]);
 
     // gone = detection lost: the child drops out of the live summary.
     processLine(state, sink, sendWake, line("w1Z:p1", "gone", "cleaner"));
-    expect(setStatus).toHaveBeenLastCalledWith(STATUS_KEY, undefined);
+    expect(setWidget).toHaveBeenLastCalledWith(STATUS_KEY, undefined);
   });
 
   it("normalizes unknown to gone and clears when that empties the fleet", () => {
-    const { state, sink, sendWake, setStatus } = setup();
+    const { state, sink, sendWake, setWidget } = setup();
     processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
     processLine(state, sink, sendWake, line("w1Z:p1", "unknown", "cleaner"));
-    expect(setStatus).toHaveBeenLastCalledWith(STATUS_KEY, undefined);
+    expect(setWidget).toHaveBeenLastCalledWith(STATUS_KEY, undefined);
   });
 
   it("wakes (triggerTurn) on terminal done, naming the child and state", () => {
@@ -295,16 +295,16 @@ describe("parent-role status line", () => {
   });
 
   it("ignores a malformed line and leaves the line untouched", () => {
-    const { state, sink, sendWake, setStatus } = setup();
+    const { state, sink, sendWake, setWidget } = setup();
     processLine(state, sink, sendWake, "not json");
-    expect(setStatus).not.toHaveBeenCalled();
+    expect(setWidget).not.toHaveBeenCalled();
     expect(sendWake).not.toHaveBeenCalled();
   });
 
   it("ignores a line missing pane_id or status", () => {
-    const { state, sink, sendWake, setStatus } = setup();
+    const { state, sink, sendWake, setWidget } = setup();
     processLine(state, sink, sendWake, JSON.stringify({ pane_id: "w1Z:p1" }));
     processLine(state, sink, sendWake, JSON.stringify({ status: "working" }));
-    expect(setStatus).not.toHaveBeenCalled();
+    expect(setWidget).not.toHaveBeenCalled();
   });
 });
