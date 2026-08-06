@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/asermax/herdr-subagents/compare/v0.3.2...v0.4.0) (2026-08-06)
+
+
+### Features
+
+* **extension:** add `subagent` tool wrapping the helper on pi ([ee5ff01](https://github.com/asermax/herdr-subagents/commit/ee5ff019a02f3ca943fb0cb91a0c0e1163711818))
+
 ## [0.3.2](https://github.com/asermax/herdr-subagents/compare/v0.3.1...v0.3.2) (2026-08-06)
 
 
