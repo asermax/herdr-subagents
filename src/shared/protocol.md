@@ -64,12 +64,11 @@ When a child finishes, you are woken to collect it.
 
 Returns `{pane_id, label, agent, status, message?, error?}`. `status` reflects herdr's state, **not** task success — a child that gives up still reaches `done`. Read `message` and judge the result yourself.
 
-Discriminate on the tag in the child's final message:
-
-- Wrapped in `<subagent-ask>…</subagent-ask>` — the child is asking a question. Reply with `{{helper}} prompt` (wrapped in `<supervisor-agent>`), and do **not** close the tab.
-- Otherwise — this is the child's result. You are done with it; close the tab.
+The `<subagent-ask>…</subagent-ask>` tag in the child's final message marks a question for you rather than a result.
 
 `blocked` is non-terminal: a blocked child is still working or waiting, so leave it alone.
+
+Once you no longer need a child, you can close it.
 
 ## Close
 
