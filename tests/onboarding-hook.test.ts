@@ -113,9 +113,9 @@ describe("generated claude delegate skill (Seam 1)", () => {
 
     // The claude wake: model-armed background wait after every prompt.
     expect(body).toContain("arm the wake");
-    // The helper ships next to the skill; claude expands $CLAUDE_PLUGIN_ROOT
-    // at runtime, so the skill carries that portable path, not a build path.
-    expect(body).toContain("${CLAUDE_PLUGIN_ROOT}/skills/" + HELPER_BIN);
+    // The helper ships under bin/ at the plugin root; claude expands
+    // $CLAUDE_PLUGIN_ROOT at runtime, so the skill carries that portable path.
+    expect(body).toContain("${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN);
     // No placeholder survives the build.
     expect(body).not.toMatch(/\{\{wake\}\}/);
     expect(body).not.toMatch(/\{\{helper\}\}/);

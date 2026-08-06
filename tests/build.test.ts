@@ -54,7 +54,7 @@ describe("build, both tokens", () => {
         // (fixpoint substitution).
         const helperInSkill: Record<"pi" | "claude", string> = {
           pi: `${root}/${HELPER_BIN}`,
-          claude: "${CLAUDE_PLUGIN_ROOT}/skills/" + HELPER_BIN,
+          claude: "${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN,
         };
         expect(body).toContain(helperInSkill[harness]);
         // No placeholder survives anywhere in the emitted artifact.
