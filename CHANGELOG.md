@@ -1,3 +1,10 @@
+## [0.2.1](https://github.com/asermax/herdr-subagents/compare/v0.2.0...v0.2.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **claude:** bundle herdr-helper next to the skill, use $CLAUDE_PLUGIN_ROOT ([f0b8287](https://github.com/asermax/herdr-subagents/commit/f0b8287b117ae5accc1485aa427774ffbd0f3095))
+
 # [0.2.0](https://github.com/asermax/herdr-subagents/compare/v0.1.0...v0.2.0) (2026-08-05)
 
 
