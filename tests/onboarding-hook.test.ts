@@ -106,14 +106,16 @@ describe("SessionStart hook wiring (Seam 1)", () => {
 });
 
 describe("generated claude delegate skill (Seam 1)", () => {
-  it("carries the absolute helper path (from the build token) and the claude wake fragment", () => {
+  it("carries the $CLAUDE_PLUGIN_ROOT helper path and the claude wake fragment", () => {
     const skillPath = join(PLUGIN_ROOT, "skills/delegate/SKILL.md");
     expect(existsSync(skillPath)).toBe(true);
     const body = readFileSync(skillPath, "utf8");
 
     // The claude wake: model-armed background wait after every prompt.
     expect(body).toContain("arm the wake");
-    expect(body).toContain(`${PLUGIN_ROOT}/${HELPER_BIN}`);
+    // The helper ships next to the skill; claude expands $CLAUDE_PLUGIN_ROOT
+    // at runtime, so the skill carries that portable path, not a build path.
+    expect(body).toContain("${CLAUDE_PLUGIN_ROOT}/skills/" + HELPER_BIN);
     // No placeholder survives the build.
     expect(body).not.toMatch(/\{\{wake\}\}/);
     expect(body).not.toMatch(/\{\{helper\}\}/);

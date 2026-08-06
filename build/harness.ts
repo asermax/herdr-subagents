@@ -37,6 +37,12 @@ export function helperPath(artifactRoot: string): string {
 export function tokenMapFor(harness: Harness, artifactRoot: string): TokenMap {
   return {
     wake: readWakeFragment(harness),
-    helper: helperPath(artifactRoot),
+    // Claude ships the helper next to the delegate skill and expands
+    // $CLAUDE_PLUGIN_ROOT at runtime, so the token is the runtime path. pi
+    // bakes the package-dir path at build time (valid for the dev loop).
+    helper:
+      harness === "claude"
+        ? "${CLAUDE_PLUGIN_ROOT}/skills/" + HELPER_BIN
+        : helperPath(artifactRoot),
   };
 }

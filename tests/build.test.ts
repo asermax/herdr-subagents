@@ -48,9 +48,15 @@ describe("build, both tokens", () => {
 
         // The wake fragment was injected at {{wake}}.
         expect(body).toContain(wakeMarker[harness]);
-        // {{helper}} resolved to the absolute per-artifact-root path, including
-        // inside the injected wake fragment (fixpoint substitution).
-        expect(body).toContain(`${root}/${HELPER_BIN}`);
+        // {{helper}} resolved: pi bakes the package-dir path at build time;
+        // claude uses the runtime $CLAUDE_PLUGIN_ROOT path so it stays portable
+        // across installs. Both also appear inside the injected wake fragment
+        // (fixpoint substitution).
+        const helperInSkill: Record<"pi" | "claude", string> = {
+          pi: `${root}/${HELPER_BIN}`,
+          claude: "${CLAUDE_PLUGIN_ROOT}/skills/" + HELPER_BIN,
+        };
+        expect(body).toContain(helperInSkill[harness]);
         // No placeholder survives anywhere in the emitted artifact.
         expect(body).not.toMatch(/\{\{wake\}\}/);
         expect(body).not.toMatch(/\{\{helper\}\}/);

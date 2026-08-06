@@ -84,6 +84,10 @@ export function filePlan(harness: Harness): EmitFile[] {
     { dest: "README.md", type: "copy", src: CLAUDE_README },
     { dest: "hooks/hooks.json", type: "copy", src: CLAUDE_HOOKS_JSON },
     { dest: "hooks/onboarding.sh", type: "copy", src: CLAUDE_ONBOARDING_HOOK },
+    // The helper binary, bundled next to the delegate skill so
+    // $CLAUDE_PLUGIN_ROOT/skills/herdr-helper (the {{helper}} token) resolves
+    // at runtime under the plugin's install dir.
+    { dest: "skills/herdr-helper", type: "bundle", src: "helper/cli.ts" },
     {
       dest: ".claude-plugin/plugin.json",
       type: "generate",
