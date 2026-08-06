@@ -74,6 +74,9 @@ interface PaneSub {
   dead: boolean;
   // Last status emitted (dedupe so a stable status is not re-sent).
   lastStatus: string | null;
+  // True once a real (non-`unknown`) status was observed. `unknown` before
+  // this point is a still-booting agent, not a loss, and is suppressed.
+  seenReal: boolean;
 }
 
 class WatchEngine {
@@ -153,6 +156,7 @@ class WatchEngine {
         live: false,
         dead: false,
         lastStatus: null,
+        seenReal: false,
       };
     sub.label = child.label;
     sub.tabId = child.tab_id;
@@ -196,8 +200,8 @@ class WatchEngine {
 
     // Baseline current status on a SEPARATE one-shot connection. Subscriptions
     // deliver changes only; this seeds the live status on subscribe. A gone /
-    // not-yet-detected pane answers agent_not_found (null) → nothing; the
-    // status event on detection (or `unknown` on loss) is what emits.
+    // not-yet-detected pane answers agent_not_found (null) → nothing; a booting
+    // agent answers `unknown`, which emit() suppresses until a real status lands.
     void probeAgent(this.socketPath, child.pane_id).then((status) => {
       if (status && !sub.dead && !this.stopped) {
         sub.live = true;
@@ -237,8 +241,18 @@ class WatchEngine {
   }
 
   // Emit only on a change; a stable status is not re-sent.
+  //
+  // `unknown` is suppressed until a real status was seen: a freshly-spawned
+  // child's harness briefly reports `unknown` while booting (spawn's own
+  // verify-and-rename treats it the same way), and emitting it would read as
+  // `gone` downstream and wake the parent for a child that is fine. Once a
+  // real status landed, `unknown` is a genuine loss (agent dead, tab open) and
+  // is emitted.
   private emit(paneId: string, sub: PaneSub, status: string): void {
+    const isUnknown = status === "unknown";
+    if (isUnknown && !sub.seenReal) return;
     if (sub.lastStatus === status) return;
+    if (!isUnknown) sub.seenReal = true;
     sub.lastStatus = status;
     this.write(JSON.stringify({ pane_id: paneId, label: sub.label, status }));
   }

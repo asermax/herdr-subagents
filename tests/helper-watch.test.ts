@@ -249,6 +249,28 @@ describe("helper watch (subscriptions)", () => {
     expect(statuses()).toEqual(["working", "unknown"]);
   });
 
+  it("suppresses `unknown` while a child is still booting; emits it once it was alive", async () => {
+    // A freshly-started harness briefly reports `unknown` while booting —
+    // spawn's own verify-and-rename treats it the same way. Forwarding it
+    // would read as `gone` downstream (parent-role normalizes unknown → gone)
+    // and wake the parent for a child that is fine. So it is suppressed until
+    // a real status lands; only then is `unknown` a genuine loss.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "unknown"); // baseline: still booting
+    startWatch();
+    await flush();
+
+    expect(statuses()).toEqual([]); // booting `unknown` suppressed
+
+    server.stream([{ paneId: "w1Z:p1", status: "working" }]); // booted
+    await flush();
+    expect(statuses()).toEqual(["working"]);
+
+    server.stream([{ paneId: "w1Z:p1", status: "unknown" }]); // now a real loss
+    await flush();
+    expect(statuses()).toEqual(["working", "unknown"]);
+  });
+
   it("picks up a child registered after watch starts via pane.created", async () => {
     seedRegistry([entry("w1Z:p1", "first")]);
     server.setCurrentStatus("w1Z:p1", "working");

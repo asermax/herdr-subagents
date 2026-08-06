@@ -21,6 +21,10 @@ import { FakeHerdrClient } from "./fake-client.js";
 let server: StubHerdrServer;
 let tmpDir: string;
 let registryPath: string;
+// Snapshot of the ambient HERDR_SUBAGENT_* env, cleared per test so childEnv()
+// is deterministic (a dev loop, or an extension that publishes the helper
+// path, sets HERDR_SUBAGENT_HELPER — childEnv would otherwise forward it).
+let savedEnv: Record<string, string | undefined>;
 
 function makeSnapshot(over: Partial<AgentSnapshot> = {}): AgentSnapshot {
   return {
@@ -40,11 +44,22 @@ beforeEach(async () => {
   await server.start();
   tmpDir = mkdtempSync(join(tmpdir(), "herdr-test-"));
   registryPath = join(tmpDir, "registry.json");
+  savedEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("HERDR_SUBAGENT")) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
 });
 
 afterEach(async () => {
   await server.close();
   rmSync(tmpDir, { recursive: true, force: true });
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 function makeRegistry(client: FakeHerdrClient) {
