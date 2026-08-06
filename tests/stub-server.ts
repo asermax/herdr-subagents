@@ -112,7 +112,7 @@ export class StubHerdrServer {
       if (!this.sockets.has(socket)) continue;
       socket.write(
         JSON.stringify({
-          event: "pane.created",
+          event: "pane_created",
           data: { pane_id: paneId },
         }) + "\n",
       );
@@ -129,10 +129,43 @@ export class StubHerdrServer {
       if (!this.sockets.has(socket)) continue;
       socket.write(
         JSON.stringify({
-          event: "pane.closed",
+          event: "pane_closed",
           data: { pane_id: paneId },
         }) + "\n",
       );
+    }
+  }
+
+  // Broadcast a tab.closed event to every connection subscribed to it. Real
+  // herdr emits `tab_closed` (underscore) with data.tab_id when a tab closes;
+  // this mirrors it so the watch's closure path (correlate by tab_id) is
+  // testable. A tab.closed subscription is workspace-wide (no id).
+  pushTabClosed(tabId: string, workspaceId = "w1Z"): void {
+    for (const socket of this.sockets) {
+      const state = this.connState.get(socket);
+      if (!state || !state.watched.has("tab.closed")) continue;
+      if (!this.sockets.has(socket)) continue;
+      socket.write(
+        JSON.stringify({
+          event: "tab_closed",
+          data: { tab_id: tabId, workspace_id: workspaceId, type: "tab_closed" },
+        }) + "\n",
+      );
+    }
+  }
+
+  // Destroy every connection currently subscribed to a pane (scoped or via a
+  // pane.agent_status_changed subscription for that pane_id). Models a pane
+  // going away mid-stream: herdr closes its subscription socket so the watch
+  // exercises its connection-death → gone/closed handling. Mirrors the clean
+  // close real herdr emits on tab close.
+  dropPane(paneId: string): void {
+    for (const socket of [...this.sockets]) {
+      const state = this.connState.get(socket);
+      if (!state || !state.watched.has(paneId)) continue;
+      this.sockets.delete(socket);
+      this.connState.delete(socket);
+      socket.destroy();
     }
   }
 
@@ -187,6 +220,24 @@ export class StubHerdrServer {
     socket: Socket,
   ): void {
     const subs = req.params.subscriptions ?? [];
+    // A subscribe targeting a stale pane resets the connection — real herdr
+    // answers `pane_not_found` (id `<reqid>:sub:<idx>:probe`) and closes the
+    // socket. Modeling it lets the per-pane watch prove a stale pane only ever
+    // takes down its own (never-live) connection, never another child's stream.
+    const staleSub = subs.find((s) => s.pane_id && this.stalePanes.has(s.pane_id));
+    if (staleSub) {
+      const idx = subs.indexOf(staleSub);
+      socket.write(
+        JSON.stringify({
+          id: `${req.id}:sub:${idx}:probe`,
+          error: { code: "pane_not_found", message: `pane ${staleSub.pane_id} not found` },
+        }) + "\n",
+      );
+      this.sockets.delete(socket);
+      this.connState.delete(socket);
+      socket.destroy();
+      return;
+    }
     const state = this.connState.get(socket) ?? {
       watched: new Set<string>(),
       scriptedDelivered: new Set<number>(),

@@ -1,7 +1,9 @@
-// `helper watch` polls agent.get per child and emits one JSON line per status
-// change. pollOnce is the unit: one probe cycle over the parent's registry
-// (served here by the stub). The parent-role consumer side (processLine →
-// footer line + wake) is covered at the bottom.
+// `helper watch` streams one JSON line per child-status change. It is
+// event-driven: each tracked child gets its own socket subscribed to
+// `pane.agent_status_changed`, plus a one-shot `agent.get` baseline on a
+// separate connection; a `pane.created` subscription discovers new children.
+// These tests drive that model against the stub. The parent-role consumer side
+// (processLine → footer line + wake) is covered at the bottom.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rmSync, writeFileSync, mkdtempSync } from "node:fs";
@@ -11,7 +13,7 @@ import { spawn } from "node:child_process";
 import { buildSync } from "esbuild";
 import { StubHerdrServer } from "./stub-server.js";
 import { fileRegistryStore } from "../src/helper/registry.js";
-import { pollOnce } from "../src/helper/watch.js";
+import { watchChildren, type WatchDeps, type WatchLine } from "../src/helper/watch.js";
 import {
   processLine,
   createParentRoleState,
@@ -50,6 +52,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await stopWatch();
   await server.close();
   rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -71,20 +74,6 @@ function seedRegistry(entries: RegistryEntry[]): void {
   writeFileSync(registryPath, JSON.stringify(obj, null, 2));
 }
 
-// Run one poll cycle against the stub + the temp registry, collecting emitted
-// lines. `last` carries tracked state across cycles (emit-on-change).
-async function poll(
-  last: Map<string, { label: string; status: string }> = new Map(),
-): Promise<{ lines: string[]; last: Map<string, { label: string; status: string }> }> {
-  const lines: string[] = [];
-  await pollOnce(
-    server.socketPath,
-    { store: fileRegistryStore(registryPath), out: (l) => lines.push(l) },
-    last,
-  );
-  return { lines, last };
-}
-
 const entry = (pane_id: string, label: string): RegistryEntry => ({
   pane_id,
   tab_id: pane_id.replace("p", "t"),
@@ -96,108 +85,193 @@ const entry = (pane_id: string, label: string): RegistryEntry => ({
   status: "idle",
 });
 
-describe("helper watch (pollOnce)", () => {
-  it("emits a live child's current status on the first poll", async () => {
+// --- watch harness ------------------------------------------------------
+
+// watchChildren resolves only on abort, so each test drives it with an
+// AbortController and collects the parsed lines. safety reconcile is disabled
+// for determinism (discovery is exercised explicitly via pane.created).
+let lines: WatchLine[];
+let controller: AbortController;
+let watchPromise: Promise<void> | null;
+
+function startWatch(deps: Partial<WatchDeps> = {}): void {
+  lines = [];
+  controller = new AbortController();
+  watchPromise = watchChildren(
+    server.socketPath,
+    {
+      store: fileRegistryStore(registryPath),
+      out: (l: string) => lines.push(JSON.parse(l) as WatchLine),
+      createdDebounceMs: 15,
+      safetyReconcileMs: -1,
+      fleetReconnectMs: 40,
+      ...deps,
+    },
+    controller.signal,
+  );
+}
+
+async function stopWatch(): Promise<void> {
+  if (!controller || !watchPromise) return;
+  controller.abort();
+  await watchPromise;
+  controller = undefined as unknown as AbortController;
+  watchPromise = null;
+}
+
+const flush = (ms = 60): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+const statuses = (): string[] => lines.map((l) => l.status);
+const panes = (): string[] => lines.map((l) => l.pane_id);
+
+describe("helper watch (subscriptions)", () => {
+  it("seeds a live child's current status on subscribe", async () => {
     seedRegistry([entry("w1Z:p1", "cleaner")]);
     server.setCurrentStatus("w1Z:p1", "working");
 
-    const { lines } = await poll();
+    startWatch();
+    await flush();
 
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toEqual({
-      pane_id: "w1Z:p1",
-      label: "cleaner",
-      status: "working",
-    });
+    expect(lines).toEqual([
+      { pane_id: "w1Z:p1", label: "cleaner", status: "working" },
+    ]);
   });
 
-  it("does not re-emit an unchanged status on the next poll", async () => {
+  it("pushes a status change as an event", async () => {
     seedRegistry([entry("w1Z:p1", "cleaner")]);
     server.setCurrentStatus("w1Z:p1", "working");
+    startWatch();
+    await flush();
 
-    const { last } = await poll();
-    const { lines } = await poll(last);
+    server.stream([{ paneId: "w1Z:p1", status: "done" }]);
+    await flush();
 
-    expect(lines).toEqual([]);
+    expect(statuses()).toEqual(["working", "done"]);
   });
 
-  it("emits on a status change", async () => {
+  it("does not re-emit an unchanged status", async () => {
     seedRegistry([entry("w1Z:p1", "cleaner")]);
     server.setCurrentStatus("w1Z:p1", "working");
-    const { last } = await poll();
+    startWatch();
+    await flush();
 
-    server.setCurrentStatus("w1Z:p1", "done");
-    const { lines } = await poll(last);
+    server.stream([{ paneId: "w1Z:p1", status: "working" }]);
+    await flush();
 
-    expect(lines.map((l) => JSON.parse(l).status)).toEqual(["done"]);
-  });
-
-  it("emits gone when a tracked child disappears", async () => {
-    seedRegistry([entry("w1Z:p1", "cleaner")]);
-    server.setCurrentStatus("w1Z:p1", "working");
-    const { last } = await poll();
-
-    server.markStale("w1Z:p1");
-    const { lines } = await poll(last);
-
-    expect(lines.map((l) => JSON.parse(l).status)).toEqual(["gone"]);
-  });
-
-  it("emits closed (not gone) when the parent removed the child from the registry", async () => {
-    // helper close removes the child from the registry. The watch emits
-    // `closed` so the widget can drop it, but the consumer must not wake —
-    // the parent closed it deliberately. `gone` stays reserved for an
-    // unexpected loss (probe failed while still tracked).
-    seedRegistry([entry("w1Z:p1", "cleaner")]);
-    server.setCurrentStatus("w1Z:p1", "working");
-    const { last } = await poll();
-
-    seedRegistry([]); // parent closed + pruned the child
-    const { lines } = await poll(last);
-
-    expect(lines.map((l) => JSON.parse(l).status)).toEqual(["closed"]);
-  });
-
-  it("skips a stale registry entry (no emit, no crash)", async () => {
-    seedRegistry([entry("w1Z:p1", "closed-long-ago")]);
-    server.markStale("w1Z:p1");
-
-    const { lines } = await poll();
-
-    // agent.get answers agent_not_found; the child contributes nothing.
-    expect(lines).toEqual([]);
+    expect(statuses()).toEqual(["working"]);
   });
 
   it("emits each live child once", async () => {
     seedRegistry([entry("w1Z:p2", "reviewer"), entry("w1Z:p1", "cleaner")]);
     server.setCurrentStatus("w1Z:p1", "working");
     server.setCurrentStatus("w1Z:p2", "done");
+    startWatch();
+    await flush();
 
-    const { lines } = await poll();
-
-    // Order is the parent-role's job (it sorts the footer); the watch just emits
-    // one line per live child.
-    const byPane = lines.map((l) => JSON.parse(l).pane_id).sort();
-    expect(byPane).toEqual(["w1Z:p1", "w1Z:p2"]);
+    expect(panes().sort()).toEqual(["w1Z:p1", "w1Z:p2"]);
   });
 
-  it("picks up a child registered after watch starts", async () => {
+  it("a stale pane's failed subscribe does not kill another child's stream", async () => {
+    // THE REGRESSION: the old multiplexed watch died entirely when one stale
+    // pane was in the registry. Per-pane connections isolate the failure — the
+    // stale pane's subscribe resets only its own (never-live) connection.
+    seedRegistry([entry("w1Z:p1", "stale-one"), entry("w1Z:p2", "live-one")]);
+    server.markStale("w1Z:p1"); // subscribe resets p1's connection
+    server.setCurrentStatus("w1Z:p2", "working");
+    startWatch();
+    await flush();
+
+    // p1 never emitted (subscribe reset before it went live); p2 seeded.
+    expect(lines.filter((l) => l.pane_id === "w1Z:p1")).toEqual([]);
+    expect(lines.filter((l) => l.pane_id === "w1Z:p2")).toEqual([
+      { pane_id: "w1Z:p2", label: "live-one", status: "working" },
+    ]);
+
+    // p2's stream survives p1's failure and keeps pushing changes.
+    server.stream([{ paneId: "w1Z:p2", status: "done" }]);
+    await flush();
+    expect(statuses().filter((s) => s === "done")).toEqual(["done"]);
+  });
+
+  it("skips a stale registry entry (no emit, no crash)", async () => {
+    seedRegistry([entry("w1Z:p1", "closed-long-ago")]);
+    server.markStale("w1Z:p1");
+    startWatch();
+    await flush();
+
+    // agent.get answers agent_not_found; the child contributes nothing.
+    expect(lines).toEqual([]);
+  });
+
+  it("emits gone when a tracked child's tab closes while still tracked", async () => {
+    // Closing a tab emits `tab_closed`. The child is still in the registry
+    // (closed outside `helper close`, or a crash that took the tab with it),
+    // so the watch reads `gone`.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "working");
+    startWatch();
+    await flush();
+
+    server.pushTabClosed("w1Z:t1"); // registry still tracks the child
+    await flush(80);
+
+    expect(statuses()).toEqual(["working", "gone"]);
+  });
+
+  it("emits closed (not gone) when the parent removed the child from the registry", async () => {
+    // helper close removes the child from the registry BEFORE closing the tab
+    // (registry-first), so the `tab_closed` correlate reads the child already
+    // gone → `closed` (no wake), not `gone`.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "working");
+    startWatch();
+    await flush();
+
+    seedRegistry([]); // helper close removed it (registry first)
+    server.pushTabClosed("w1Z:t1"); // then the tab close fired tab_closed
+    await flush(80);
+
+    expect(statuses()).toEqual(["working", "closed"]);
+  });
+
+  it("emits unknown (dead-pane) via the status subscription", async () => {
+    // A harness that dies with its tab still open surfaces as `unknown` on the
+    // status subscription (no tab_closed). The parent-role consumer normalizes
+    // unknown → gone; the watch just forwards the status it is pushed.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "working");
+    startWatch();
+    await flush();
+
+    server.stream([{ paneId: "w1Z:p1", status: "unknown" }]);
+    await flush();
+
+    expect(statuses()).toEqual(["working", "unknown"]);
+  });
+
+  it("picks up a child registered after watch starts via pane.created", async () => {
     seedRegistry([entry("w1Z:p1", "first")]);
     server.setCurrentStatus("w1Z:p1", "working");
-    const { last } = await poll();
+    startWatch();
+    await flush();
 
-    // A second child appears in the registry (spawned mid-session).
+    // A second child is spawned mid-session: registry add + pane.created.
     seedRegistry([entry("w1Z:p1", "first"), entry("w1Z:p2", "second")]);
     server.setCurrentStatus("w1Z:p2", "idle");
-    const { lines } = await poll(last);
+    server.pushPaneCreated("w1Z:p2");
+    await flush(60); // includes the created-debounce window
 
-    // p1 unchanged (no emit); p2 is new.
-    expect(lines.map((l) => JSON.parse(l).pane_id)).toEqual(["w1Z:p2"]);
+    expect(lines.find((l) => l.pane_id === "w1Z:p2")).toEqual({
+      pane_id: "w1Z:p2",
+      label: "second",
+      status: "idle",
+    });
   });
 
   it("emits nothing when no children are registered", async () => {
     seedRegistry([]);
-    const { lines } = await poll();
+    startWatch();
+    await flush();
     expect(lines).toEqual([]);
   });
 });

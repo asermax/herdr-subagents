@@ -8,7 +8,7 @@ import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
 import { DEFAULT_PROMPT_BOUNDS, deliverPrompt } from "./prompt.js";
 import { fileRegistryStore, Registry } from "./registry.js";
-import { isSpawnFailure, spawnChild, slugifyAgentName, type SpawnResult } from "./spawn.js";
+import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
 import { runWatch } from "./watch.js";
 
 const KINDS = ["pi", "claude"] as const;
@@ -123,19 +123,8 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   try {
     const result: SpawnResult = await spawnChild(
       { kind, agentName, label, cwd, workspaceId, passThroughArgs: passthroughArgs(rawArgs) },
-      { client },
+      { client, tracking: registry },
     );
-    const effectiveAgent = agentName ?? slugifyAgentName(label);
-    await registry.add({
-      pane_id: result.pane_id,
-      tab_id: result.tab_id,
-      workspace_id: workspaceId,
-      label,
-      agent: effectiveAgent,
-      kind,
-      agent_name: effectiveAgent,
-      status: "idle",
-    });
     emit(result);
   } catch (e) {
     emit(e);
@@ -213,11 +202,16 @@ async function runClose(args: CloseArgs): Promise<void> {
   const tabId = args.tabId;
   if (!tabId) fail("usage: helper close <tab_id>", 2);
   const { client, registry } = buildDeps();
-  await client.tabClose(tabId);
-  // Drop any tracked child whose tab we just closed.
+  // Remove tracked children from the registry BEFORE closing the tab: the
+  // event-driven watch reads the registry when a child's subscription
+  // connection dies (the tab close kills it) to tell a deliberate close
+  // (closed, no wake) from an unexpected loss (gone, wakes). Registry-first
+  // makes that signal race-free — by the time the connection dies, the child
+  // is already gone from the registry.
   for (const child of await registry.list()) {
     if (child.tab_id === tabId) await registry.remove(child.pane_id);
   }
+  await client.tabClose(tabId);
   emit({ tab_id: tabId, closed: true });
 }
 

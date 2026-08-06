@@ -1,5 +1,6 @@
 import type { HerdrClient, ReadinessResult } from "./herdr-types.js";
 import { HerdrError } from "./herdr-types.js";
+import type { RegistryEntry } from "./registry.js";
 
 // spawn is a verify-and-repair sequence. Success from `agent start` is NOT
 // evidence a child is spawned and addressable. One observed failure drives
@@ -100,6 +101,18 @@ export interface SpawnFailure {
 export interface SpawnDeps {
   client: HerdrClient;
   bounds?: Partial<SpawnBounds>;
+  // Optional registry tracking. When present, spawn records the child in the
+  // registry right after tabCreate (so the event-driven watch discovers it via
+  // pane.created without waiting for the full spawn sequence) and removes the
+  // entry on failure. Absent in the spawn unit tests, which test mechanics.
+  tracking?: SpawnTracking;
+}
+
+// The slice of Registry that spawn drives. The real Registry satisfies this;
+// tests pass a plain object.
+export interface SpawnTracking {
+  add(entry: RegistryEntry): Promise<void>;
+  remove(paneId: string): Promise<void>;
 }
 
 export async function spawnChild(
@@ -129,6 +142,30 @@ export async function spawnChild(
       reason: "tab-create",
       message: `could not create child tab: ${e instanceof Error ? e.message : String(e)}`,
     } satisfies SpawnFailure;
+  }
+
+  // Track the child in the registry NOW — right after tabCreate, before
+  // agentStart. pane.created fires at tabCreate; spawn's registry write must
+  // precede the (multi-second) agent-start/verify sequence so the event-driven
+  // watch, on pane.created → reconcile, finds the child already tracked and
+  // opens its status subscription. On any later failure the entry is removed.
+  if (deps.tracking) {
+    const effectiveAgent = input.agentName ?? slugifyAgentName(input.label);
+    try {
+      await deps.tracking.add({
+        pane_id: paneId,
+        tab_id: tabId,
+        workspace_id: input.workspaceId,
+        label: input.label,
+        agent: effectiveAgent,
+        kind: input.kind,
+        agent_name: effectiveAgent,
+        status: "idle",
+      });
+    } catch {
+      // A registry write failure must not block the spawn; the watch's safety
+      // reconcile + `helper list` keep the fleet honest.
+    }
   }
 
   // Anything past here owns a half-created tab and must clean up on failure.
@@ -163,7 +200,18 @@ export async function spawnChild(
     return { pane_id: paneId, tab_id: tabId };
   } catch (e) {
     // 4. On exhaustion of any bound, close the half-created tab and report.
-    //    Never keep a broken child.
+    //    Never keep a broken child. Remove the registry entry BEFORE closing
+    //    the tab: the event-driven watch reads the registry when the
+    //    subscription connection dies (the tab close kills it) to tell a
+    //    deliberate close (closed, no wake) from an unexpected loss (gone,
+    //    wakes). Registry-first makes that signal race-free.
+    if (deps.tracking) {
+      try {
+        await deps.tracking.remove(paneId);
+      } catch {
+        // best-effort
+      }
+    }
     try {
       await client.tabClose(tabId);
     } catch {
