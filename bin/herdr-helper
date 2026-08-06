@@ -1,0 +1,1646 @@
+#!/usr/bin/env node
+
+// node_modules/citty/dist/_chunks/libs/scule.mjs
+var NUMBER_CHAR_RE = /\d/;
+var STR_SPLITTERS = [
+  "-",
+  "_",
+  "/",
+  "."
+];
+function isUppercase(char = "") {
+  if (NUMBER_CHAR_RE.test(char)) return;
+  return char !== char.toLowerCase();
+}
+function splitByCase(str, separators) {
+  const splitters = separators ?? STR_SPLITTERS;
+  const parts = [];
+  if (!str || typeof str !== "string") return parts;
+  let buff = "";
+  let previousUpper;
+  let previousSplitter;
+  for (const char of str) {
+    const isSplitter = splitters.includes(char);
+    if (isSplitter === true) {
+      parts.push(buff);
+      buff = "";
+      previousUpper = void 0;
+      continue;
+    }
+    const isUpper = isUppercase(char);
+    if (previousSplitter === false) {
+      if (previousUpper === false && isUpper === true) {
+        parts.push(buff);
+        buff = char;
+        previousUpper = isUpper;
+        continue;
+      }
+      if (previousUpper === true && isUpper === false && buff.length > 1) {
+        const lastChar = buff.at(-1);
+        parts.push(buff.slice(0, Math.max(0, buff.length - 1)));
+        buff = lastChar + char;
+        previousUpper = isUpper;
+        continue;
+      }
+    }
+    buff += char;
+    previousUpper = isUpper;
+    previousSplitter = isSplitter;
+  }
+  parts.push(buff);
+  return parts;
+}
+function upperFirst(str) {
+  return str ? str[0].toUpperCase() + str.slice(1) : "";
+}
+function lowerFirst(str) {
+  return str ? str[0].toLowerCase() + str.slice(1) : "";
+}
+function pascalCase(str, opts) {
+  return str ? (Array.isArray(str) ? str : splitByCase(str)).map((p) => upperFirst(opts?.normalize ? p.toLowerCase() : p)).join("") : "";
+}
+function camelCase(str, opts) {
+  return lowerFirst(pascalCase(str || "", opts));
+}
+function kebabCase(str, joiner) {
+  return str ? (Array.isArray(str) ? str : splitByCase(str)).map((p) => p.toLowerCase()).join(joiner ?? "-") : "";
+}
+function snakeCase(str) {
+  return kebabCase(str || "", "_");
+}
+
+// node_modules/citty/dist/index.mjs
+import { parseArgs as parseArgs$1 } from "node:util";
+function toArray(val) {
+  if (Array.isArray(val)) return val;
+  return val === void 0 ? [] : [val];
+}
+function formatLineColumns(lines, linePrefix = "") {
+  const maxLength = [];
+  for (const line of lines) for (const [i, element] of line.entries()) maxLength[i] = Math.max(maxLength[i] || 0, element.length);
+  return lines.map((l) => l.map((c, i) => linePrefix + c[i === 0 ? "padStart" : "padEnd"](maxLength[i])).join("  ")).join("\n");
+}
+function resolveValue(input) {
+  return typeof input === "function" ? input() : input;
+}
+var CLIError = class extends Error {
+  code;
+  constructor(message, code) {
+    super(message);
+    this.name = "CLIError";
+    this.code = code;
+  }
+};
+function parseRawArgs(args = [], opts = {}) {
+  const booleans = new Set(opts.boolean || []);
+  const strings = new Set(opts.string || []);
+  const aliasMap = opts.alias || {};
+  const defaults = opts.default || {};
+  const aliasToMain = /* @__PURE__ */ new Map();
+  const mainToAliases = /* @__PURE__ */ new Map();
+  for (const [key, value] of Object.entries(aliasMap)) {
+    const targets = value;
+    for (const target of targets) {
+      aliasToMain.set(key, target);
+      if (!mainToAliases.has(target)) mainToAliases.set(target, []);
+      mainToAliases.get(target).push(key);
+      aliasToMain.set(target, key);
+      if (!mainToAliases.has(key)) mainToAliases.set(key, []);
+      mainToAliases.get(key).push(target);
+    }
+  }
+  const options = {};
+  function getType(name) {
+    if (booleans.has(name)) return "boolean";
+    const aliases = mainToAliases.get(name) || [];
+    for (const alias of aliases) if (booleans.has(alias)) return "boolean";
+    return "string";
+  }
+  function isStringType(name) {
+    if (strings.has(name)) return true;
+    const aliases = mainToAliases.get(name) || [];
+    for (const alias of aliases) if (strings.has(alias)) return true;
+    return false;
+  }
+  const allOptions = /* @__PURE__ */ new Set([
+    ...booleans,
+    ...strings,
+    ...Object.keys(aliasMap),
+    ...Object.values(aliasMap).flat(),
+    ...Object.keys(defaults)
+  ]);
+  for (const name of allOptions) if (!options[name]) options[name] = {
+    type: getType(name),
+    default: defaults[name]
+  };
+  for (const [alias, main2] of aliasToMain.entries()) if (alias.length === 1 && options[main2] && !options[main2].short) options[main2].short = alias;
+  const processedArgs = [];
+  const negatedFlags = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") {
+      processedArgs.push(...args.slice(i));
+      break;
+    }
+    if (arg.startsWith("--no-")) {
+      const flagName = arg.slice(5);
+      negatedFlags[flagName] = true;
+      continue;
+    }
+    processedArgs.push(arg);
+  }
+  let parsed;
+  try {
+    parsed = parseArgs$1({
+      args: processedArgs,
+      options: Object.keys(options).length > 0 ? options : void 0,
+      allowPositionals: true,
+      strict: false
+    });
+  } catch {
+    parsed = {
+      values: {},
+      positionals: processedArgs
+    };
+  }
+  const out = { _: [] };
+  out._ = parsed.positionals;
+  for (const [key, value] of Object.entries(parsed.values)) {
+    let coerced = value;
+    if (getType(key) === "boolean" && typeof value === "string") coerced = value !== "false";
+    else if (isStringType(key) && typeof value === "boolean") coerced = "";
+    out[key] = coerced;
+  }
+  for (const [name] of Object.entries(negatedFlags)) {
+    out[name] = false;
+    const mainName = aliasToMain.get(name);
+    if (mainName) out[mainName] = false;
+    const aliases = mainToAliases.get(name);
+    if (aliases) for (const alias of aliases) out[alias] = false;
+  }
+  for (const [alias, main2] of aliasToMain.entries()) {
+    if (out[alias] !== void 0 && out[main2] === void 0) out[main2] = out[alias];
+    if (out[main2] !== void 0 && out[alias] === void 0) out[alias] = out[main2];
+    if (out[alias] !== out[main2] && defaults[main2] === out[main2]) out[main2] = out[alias];
+  }
+  return out;
+}
+var noColor = /* @__PURE__ */ (() => {
+  const env = globalThis.process?.env ?? {};
+  return env.NO_COLOR === "1" || env.TERM === "dumb" || env.TEST || env.CI;
+})();
+var _c = (c, r = 39) => (t) => noColor ? t : `\x1B[${c}m${t}\x1B[${r}m`;
+var bold = /* @__PURE__ */ _c(1, 22);
+var cyan = /* @__PURE__ */ _c(36);
+var gray = /* @__PURE__ */ _c(90);
+var underline = /* @__PURE__ */ _c(4, 24);
+function parseArgs(rawArgs, argsDef) {
+  const parseOptions = {
+    boolean: [],
+    string: [],
+    alias: {},
+    default: {}
+  };
+  const args = resolveArgs(argsDef);
+  for (const arg of args) {
+    if (arg.type === "positional") continue;
+    if (arg.type === "string" || arg.type === "enum") parseOptions.string.push(arg.name);
+    else if (arg.type === "boolean") parseOptions.boolean.push(arg.name);
+    if (arg.default !== void 0) parseOptions.default[arg.name] = arg.default;
+    if (arg.alias) parseOptions.alias[arg.name] = arg.alias;
+    const camelName = camelCase(arg.name);
+    const kebabName = kebabCase(arg.name);
+    if (camelName !== arg.name || kebabName !== arg.name) {
+      const existingAliases = toArray(parseOptions.alias[arg.name] || []);
+      if (camelName !== arg.name && !existingAliases.includes(camelName)) existingAliases.push(camelName);
+      if (kebabName !== arg.name && !existingAliases.includes(kebabName)) existingAliases.push(kebabName);
+      if (existingAliases.length > 0) parseOptions.alias[arg.name] = existingAliases;
+    }
+  }
+  const parsed = parseRawArgs(rawArgs, parseOptions);
+  const [...positionalArguments] = parsed._;
+  const parsedArgsProxy = new Proxy(parsed, { get(target, prop) {
+    return target[prop] ?? target[camelCase(prop)] ?? target[kebabCase(prop)];
+  } });
+  for (const [, arg] of args.entries()) if (arg.type === "positional") {
+    const nextPositionalArgument = positionalArguments.shift();
+    if (nextPositionalArgument !== void 0) parsedArgsProxy[arg.name] = nextPositionalArgument;
+    else if (arg.default === void 0 && arg.required !== false) throw new CLIError(`Missing required positional argument: ${arg.name.toUpperCase()}`, "EARG");
+    else parsedArgsProxy[arg.name] = arg.default;
+  } else if (arg.type === "enum") {
+    const argument = parsedArgsProxy[arg.name];
+    const options = arg.options || [];
+    if (argument !== void 0 && options.length > 0 && !options.includes(argument)) throw new CLIError(`Invalid value for argument: ${cyan(`--${arg.name}`)} (${cyan(argument)}). Expected one of: ${options.map((o) => cyan(o)).join(", ")}.`, "EARG");
+  } else if (arg.required && parsedArgsProxy[arg.name] === void 0) throw new CLIError(`Missing required argument: --${arg.name}`, "EARG");
+  return parsedArgsProxy;
+}
+function resolveArgs(argsDef) {
+  const args = [];
+  for (const [name, argDef] of Object.entries(argsDef || {})) args.push({
+    ...argDef,
+    name,
+    alias: toArray(argDef.alias)
+  });
+  return args;
+}
+async function resolvePlugins(plugins) {
+  return Promise.all(plugins.map((p) => resolveValue(p)));
+}
+function defineCommand(def) {
+  return def;
+}
+async function runCommand(cmd, opts) {
+  const cmdArgs = await resolveValue(cmd.args || {});
+  const parsedArgs = parseArgs(opts.rawArgs, cmdArgs);
+  const context = {
+    rawArgs: opts.rawArgs,
+    args: parsedArgs,
+    data: opts.data,
+    cmd
+  };
+  const plugins = await resolvePlugins(cmd.plugins ?? []);
+  let result;
+  let runError;
+  try {
+    for (const plugin of plugins) await plugin.setup?.(context);
+    if (typeof cmd.setup === "function") await cmd.setup(context);
+    const subCommands = await resolveValue(cmd.subCommands);
+    if (subCommands && Object.keys(subCommands).length > 0) {
+      const subCommandArgIndex = findSubCommandIndex(opts.rawArgs, cmdArgs);
+      const explicitName = opts.rawArgs[subCommandArgIndex];
+      if (explicitName) {
+        const subCommand = await _findSubCommand(subCommands, explicitName);
+        if (!subCommand) throw new CLIError(`Unknown command ${cyan(explicitName)}`, "E_UNKNOWN_COMMAND");
+        await runCommand(subCommand, { rawArgs: opts.rawArgs.slice(subCommandArgIndex + 1) });
+      } else {
+        const defaultSubCommand = await resolveValue(cmd.default);
+        if (defaultSubCommand) {
+          if (cmd.run) throw new CLIError(`Cannot specify both 'run' and 'default' on the same command.`, "E_DEFAULT_CONFLICT");
+          const subCommand = await _findSubCommand(subCommands, defaultSubCommand);
+          if (!subCommand) throw new CLIError(`Default sub command ${cyan(defaultSubCommand)} not found in subCommands.`, "E_UNKNOWN_COMMAND");
+          await runCommand(subCommand, { rawArgs: opts.rawArgs });
+        } else if (!cmd.run) throw new CLIError(`No command specified.`, "E_NO_COMMAND");
+      }
+    }
+    if (typeof cmd.run === "function") result = await cmd.run(context);
+  } catch (error) {
+    runError = error;
+  }
+  const cleanupErrors = [];
+  if (typeof cmd.cleanup === "function") try {
+    await cmd.cleanup(context);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  for (const plugin of [...plugins].reverse()) try {
+    await plugin.cleanup?.(context);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (runError) throw runError;
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) throw new Error("Multiple cleanup errors", { cause: cleanupErrors });
+  return { result };
+}
+async function resolveSubCommand(cmd, rawArgs, parent) {
+  const subCommands = await resolveValue(cmd.subCommands);
+  if (subCommands && Object.keys(subCommands).length > 0) {
+    const subCommandArgIndex = findSubCommandIndex(rawArgs, await resolveValue(cmd.args || {}));
+    const subCommandName = rawArgs[subCommandArgIndex];
+    const subCommand = await _findSubCommand(subCommands, subCommandName);
+    if (subCommand) return resolveSubCommand(subCommand, rawArgs.slice(subCommandArgIndex + 1), cmd);
+  }
+  return [cmd, parent];
+}
+async function _findSubCommand(subCommands, name) {
+  if (name in subCommands) return resolveValue(subCommands[name]);
+  for (const sub of Object.values(subCommands)) {
+    const resolved = await resolveValue(sub);
+    const meta = await resolveValue(resolved?.meta);
+    if (meta?.alias) {
+      if (toArray(meta.alias).includes(name)) return resolved;
+    }
+  }
+}
+function findSubCommandIndex(rawArgs, argsDef) {
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i];
+    if (arg === "--") return -1;
+    if (arg.startsWith("-")) {
+      if (!arg.includes("=") && _isValueFlag(arg, argsDef)) i++;
+      continue;
+    }
+    return i;
+  }
+  return -1;
+}
+function _isValueFlag(flag, argsDef) {
+  const name = flag.replace(/^-{1,2}/, "");
+  const normalized = camelCase(name);
+  for (const [key, def] of Object.entries(argsDef)) {
+    if (def.type !== "string" && def.type !== "enum") continue;
+    if (normalized === camelCase(key)) return true;
+    if ((Array.isArray(def.alias) ? def.alias : def.alias ? [def.alias] : []).includes(name)) return true;
+  }
+  return false;
+}
+async function showUsage(cmd, parent) {
+  try {
+    console.log(await renderUsage(cmd, parent) + "\n");
+  } catch (error) {
+    console.error(error);
+  }
+}
+var negativePrefixRe = /^no[-A-Z]/;
+async function renderUsage(cmd, parent) {
+  const cmdMeta = await resolveValue(cmd.meta || {});
+  const cmdArgs = resolveArgs(await resolveValue(cmd.args || {}));
+  const parentMeta = await resolveValue(parent?.meta || {});
+  const commandName = `${parentMeta.name ? `${parentMeta.name} ` : ""}` + (cmdMeta.name || process.argv[1]);
+  const argLines = [];
+  const posLines = [];
+  const commandsLines = [];
+  const usageLine = [];
+  for (const arg of cmdArgs) if (arg.type === "positional") {
+    const name = arg.name.toUpperCase();
+    const isRequired = arg.required !== false && arg.default === void 0;
+    posLines.push([cyan(name + renderValueHint(arg)), renderDescription(arg, isRequired)]);
+    usageLine.push(isRequired ? `<${name}>` : `[${name}]`);
+  } else {
+    const isRequired = arg.required === true && arg.default === void 0;
+    const argStr = [...(arg.alias || []).map((a) => `-${a}`), `--${arg.name}`].join(", ") + renderValueHint(arg);
+    argLines.push([cyan(argStr), renderDescription(arg, isRequired)]);
+    if (arg.type === "boolean" && (arg.default === true || arg.negativeDescription) && !negativePrefixRe.test(arg.name)) {
+      const negativeArgStr = [...(arg.alias || []).map((a) => `--no-${a}`), `--no-${arg.name}`].join(", ");
+      argLines.push([cyan(negativeArgStr), [arg.negativeDescription, isRequired ? gray("(Required)") : ""].filter(Boolean).join(" ")]);
+    }
+    if (isRequired) usageLine.push(`--${arg.name}` + renderValueHint(arg));
+  }
+  if (cmd.subCommands) {
+    const commandNames = [];
+    const subCommands = await resolveValue(cmd.subCommands);
+    for (const [name, sub] of Object.entries(subCommands)) {
+      const meta = await resolveValue((await resolveValue(sub))?.meta);
+      if (meta?.hidden) continue;
+      const aliases = toArray(meta?.alias);
+      const label = [name, ...aliases].join(", ");
+      commandsLines.push([cyan(label), meta?.description || ""]);
+      commandNames.push(name, ...aliases);
+    }
+    usageLine.push(commandNames.join("|"));
+  }
+  const usageLines = [];
+  const version = cmdMeta.version || parentMeta.version;
+  usageLines.push(gray(`${cmdMeta.description} (${commandName + (version ? ` v${version}` : "")})`), "");
+  const hasOptions = argLines.length > 0 || posLines.length > 0;
+  usageLines.push(`${underline(bold("USAGE"))} ${cyan(`${commandName}${hasOptions ? " [OPTIONS]" : ""} ${usageLine.join(" ")}`)}`, "");
+  if (posLines.length > 0) {
+    usageLines.push(underline(bold("ARGUMENTS")), "");
+    usageLines.push(formatLineColumns(posLines, "  "));
+    usageLines.push("");
+  }
+  if (argLines.length > 0) {
+    usageLines.push(underline(bold("OPTIONS")), "");
+    usageLines.push(formatLineColumns(argLines, "  "));
+    usageLines.push("");
+  }
+  if (commandsLines.length > 0) {
+    usageLines.push(underline(bold("COMMANDS")), "");
+    usageLines.push(formatLineColumns(commandsLines, "  "));
+    usageLines.push("", `Use ${cyan(`${commandName} <command> --help`)} for more information about a command.`);
+  }
+  return usageLines.filter((l) => typeof l === "string").join("\n");
+}
+function renderValueHint(arg) {
+  const valueHint = arg.valueHint ? `=<${arg.valueHint}>` : "";
+  const fallbackValueHint = valueHint || `=<${snakeCase(arg.name)}>`;
+  if (!arg.type || arg.type === "positional" || arg.type === "boolean") return valueHint;
+  if (arg.type === "enum" && arg.options?.length) return `=<${arg.options.join("|")}>`;
+  return fallbackValueHint;
+}
+function renderDescription(arg, required) {
+  const requiredHint = required ? gray("(Required)") : "";
+  const defaultHint = arg.default === void 0 ? "" : gray(`(Default: ${arg.default})`);
+  return [
+    arg.description,
+    requiredHint,
+    defaultHint
+  ].filter(Boolean).join(" ");
+}
+async function runMain(cmd, opts = {}) {
+  const rawArgs = opts.rawArgs || process.argv.slice(2);
+  const showUsage$1 = opts.showUsage || showUsage;
+  try {
+    const builtinFlags = await _resolveBuiltinFlags(cmd);
+    if (builtinFlags.help.length > 0 && rawArgs.some((arg) => builtinFlags.help.includes(arg))) {
+      await showUsage$1(...await resolveSubCommand(cmd, rawArgs));
+      process.exit(0);
+    } else if (rawArgs.length === 1 && builtinFlags.version.includes(rawArgs[0])) {
+      const meta = typeof cmd.meta === "function" ? await cmd.meta() : await cmd.meta;
+      if (!meta?.version) throw new CLIError("No version specified", "E_NO_VERSION");
+      console.log(meta.version);
+    } else await runCommand(cmd, { rawArgs });
+  } catch (error) {
+    if (error instanceof CLIError) {
+      await showUsage$1(...await resolveSubCommand(cmd, rawArgs));
+      console.error(error.message);
+    } else console.error(error, "\n");
+    process.exit(1);
+  }
+}
+async function _resolveBuiltinFlags(cmd) {
+  const argsDef = await resolveValue(cmd.args || {});
+  const userNames = /* @__PURE__ */ new Set();
+  const userAliases = /* @__PURE__ */ new Set();
+  for (const [name, def] of Object.entries(argsDef)) {
+    userNames.add(name);
+    for (const alias of toArray(def.alias)) userAliases.add(alias);
+  }
+  return {
+    help: _getBuiltinFlags("help", "h", userNames, userAliases),
+    version: _getBuiltinFlags("version", "v", userNames, userAliases)
+  };
+}
+function _getBuiltinFlags(long, short, userNames, userAliases) {
+  if (userNames.has(long) || userAliases.has(long)) return [];
+  if (userNames.has(short) || userAliases.has(short)) return [`--${long}`];
+  return [`--${long}`, `-${short}`];
+}
+
+// src/helper/collect.ts
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+var SUBAGENT_ASK = "<subagent-ask>";
+async function collectChild(paneId, deps) {
+  const { client, registry } = deps;
+  const readText = deps.readText ?? defaultReadText;
+  const resolveClaude = deps.resolveClaudeSession ?? defaultResolveClaudeSession;
+  const retryMs = deps.transcriptRetryMs ?? 300;
+  const attempts = deps.transcriptAttempts ?? 6;
+  const entry = await registry.get(paneId);
+  if (!entry) {
+    return {
+      pane_id: paneId,
+      label: "",
+      agent: "",
+      status: "gone",
+      error: `no child tracked for pane ${paneId}`
+    };
+  }
+  const base = {
+    pane_id: paneId,
+    label: entry.label,
+    agent: entry.agent,
+    status: normalizeStatus(entry.status)
+  };
+  const snap = await client.agentGet(paneId);
+  if (!snap) {
+    return { ...base, status: "gone", error: `pane ${paneId} no longer resolves` };
+  }
+  const status = normalizeStatus(snap.agent_status);
+  const payload = { ...base, status };
+  if (status === "blocked") {
+    return payload;
+  }
+  const session = snap.agent_session;
+  if (!session) {
+    return { ...payload, error: "agent has no agent_session recorded" };
+  }
+  const transcriptPath = session.kind === "path" ? session.value : resolveClaude(session.value);
+  if (!transcriptPath) {
+    return { ...payload, error: `cannot resolve claude session ${session.value}` };
+  }
+  const message = await readLastAssistantMessage(
+    transcriptPath,
+    session.kind,
+    readText,
+    retryMs,
+    attempts
+  );
+  if (message === void 0) {
+    return { ...payload, error: "transcript has no complete assistant message" };
+  }
+  payload.message = message;
+  payload.ask = message.includes(SUBAGENT_ASK);
+  await registry.setStatus(paneId, snap.agent_status);
+  return payload;
+}
+function normalizeStatus(status) {
+  if (status === "unknown") return "gone";
+  return status;
+}
+async function readLastAssistantMessage(path, kind, readText, retryMs, attempts) {
+  for (let i = 0; i < attempts; i++) {
+    const text = readText(path);
+    const msg = kind === "path" ? lastPiAssistant(text) : lastClaudeAssistant(text);
+    if (msg !== void 0) return msg;
+    await sleep(retryMs);
+  }
+  return void 0;
+}
+function lastAssistantMatching(text, match) {
+  const lines = text.split("\n").filter((l) => l.trim() !== "");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line === void 0) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const extracted = match(entry);
+    if (extracted !== void 0) return extracted;
+  }
+  return void 0;
+}
+function lastPiAssistant(text) {
+  return lastAssistantMatching(
+    text,
+    (entry) => entry.type === "message" && entry.message?.role === "assistant" ? extractText(entry.message.content) : void 0
+  );
+}
+function lastClaudeAssistant(text) {
+  return lastAssistantMatching(text, (entry) => {
+    if (entry.type !== "assistant" && entry.message?.role !== "assistant") return void 0;
+    if (typeof entry.message?.stop_reason !== "string") return void 0;
+    return extractText(entry.message?.content);
+  });
+}
+function extractText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return void 0;
+  const texts = content.filter((b) => isTextBlock(b)).map((b) => b.text);
+  return texts.length > 0 ? texts.join("\n") : void 0;
+}
+function isTextBlock(b) {
+  return typeof b === "object" && b !== null && b.type === "text";
+}
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function defaultReadText(path) {
+  return readFileSync(path, "utf8");
+}
+function defaultResolveClaudeSession(uuid) {
+  const projectsRoot = join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsRoot)) return void 0;
+  for (const dir of readdirSync(projectsRoot)) {
+    const candidate = join(projectsRoot, dir, `${uuid}.jsonl`);
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return void 0;
+}
+async function waitChild(paneId, client, timeoutMs = 0) {
+  const before = await client.agentGet(paneId);
+  const fromSeq = before?.state_change_seq ?? 0;
+  return client.waitForStatus(paneId, ["done", "unknown"], {
+    timeoutMs: timeoutMs || 36e5,
+    fromSeq
+  });
+}
+
+// src/helper/herdr-client.ts
+import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
+
+// src/helper/herdr-types.ts
+var HerdrError = class extends Error {
+  code;
+  cause;
+  constructor(code, message, cause) {
+    super(`${code}: ${message}`);
+    this.code = code;
+    this.cause = cause;
+    this.name = "HerdrError";
+  }
+};
+
+// src/helper/herdr-client.ts
+var HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
+function runCli(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(HERDR_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => stdout += d);
+    child.stderr.on("data", (d) => stderr += d);
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 0 }));
+  });
+}
+async function herdr(...args) {
+  const { stdout, stderr, code } = await runCli(args);
+  const trimmed = stdout.trim();
+  if (trimmed === "") {
+    const errTrimmed = stderr.trim();
+    if (errTrimmed !== "") {
+      try {
+        const errEnv = JSON.parse(errTrimmed);
+        if (errEnv.error) {
+          throw new HerdrError(errEnv.error.code, errEnv.error.message, stderr);
+        }
+      } catch (e) {
+        if (e instanceof HerdrError) throw e;
+      }
+    }
+    throw new HerdrError(
+      "herdr_empty",
+      `herdr ${args.join(" ")} produced no output (exit ${code})`,
+      stderr
+    );
+  }
+  let env;
+  try {
+    env = JSON.parse(trimmed);
+  } catch {
+    const msg = stderr.trim().split("\n")[0] || trimmed;
+    throw new HerdrError("herdr_invalid_json", msg, stderr);
+  }
+  if (env.error) {
+    throw new HerdrError(env.error.code, env.error.message, stderr);
+  }
+  return env.result;
+}
+function toSnapshot(raw) {
+  const snap = {
+    pane_id: raw.pane_id,
+    tab_id: raw.tab_id,
+    workspace_id: raw.workspace_id,
+    name: raw.name,
+    agent: raw.agent,
+    agent_status: raw.agent_status
+  };
+  if (raw.agent_session) snap.agent_session = raw.agent_session;
+  if (raw.state_change_seq !== void 0) snap.state_change_seq = raw.state_change_seq;
+  if (raw.cwd !== void 0) snap.cwd = raw.cwd;
+  if (raw.interactive_ready !== void 0) snap.interactive_ready = raw.interactive_ready;
+  return snap;
+}
+var RealHerdrClient = class {
+  constructor(socketPath) {
+    this.socketPath = socketPath;
+  }
+  socketPath;
+  async tabCreate(params) {
+    const args = [
+      "tab",
+      "create",
+      "--workspace",
+      params.workspaceId,
+      "--cwd",
+      params.cwd,
+      "--label",
+      params.label,
+      params.focus ? "--focus" : "--no-focus"
+    ];
+    for (const [k, v] of Object.entries(params.env)) {
+      args.push("--env", `${k}=${v}`);
+    }
+    const res = await herdr(...args);
+    return {
+      pane_id: res.root_pane.pane_id,
+      tab_id: res.root_pane.tab_id,
+      workspace_id: res.root_pane.workspace_id
+    };
+  }
+  async tabClose(tabId) {
+    await herdr("tab", "close", tabId);
+  }
+  async agentStart(params) {
+    const res = await herdr(
+      "agent",
+      "start",
+      params.name,
+      "--kind",
+      params.kind,
+      "--pane",
+      params.paneId,
+      "--timeout",
+      String(params.timeoutMs),
+      "--",
+      ...params.args
+    );
+    return toSnapshot(res.agent);
+  }
+  async agentGet(target) {
+    try {
+      const res = await herdr("agent", "get", target);
+      return toSnapshot(res.agent);
+    } catch (e) {
+      if (e instanceof HerdrError && e.code === "agent_not_found") return null;
+      throw e;
+    }
+  }
+  async agentRename(target, name) {
+    await herdr("agent", "rename", target, name);
+  }
+  async agentPrompt(target, body) {
+    await herdr("agent", "prompt", target, body);
+  }
+  async waitForStatus(paneId, statuses, opts) {
+    return waitForStatusOverSocket(this.socketPath, paneId, statuses, opts);
+  }
+};
+function waitForStatusOverSocket(socketPath, paneId, statuses, opts) {
+  return new Promise((resolve, reject) => {
+    let socket = null;
+    let buffer = "";
+    let settled = false;
+    const subId = `wait:${paneId}`;
+    const want = new Set(statuses);
+    const request = JSON.stringify({
+      id: subId,
+      method: "events.subscribe",
+      params: {
+        subscriptions: [
+          { type: "pane.agent_status_changed", pane_id: paneId }
+        ]
+      }
+    });
+    const finish = (fn) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    const cleanup = () => {
+      socket?.destroy();
+      socket = null;
+    };
+    const timer = setTimeout(() => {
+      finish(() => {
+        cleanup();
+        reject(new HerdrError("wait_timeout", `no status change for ${paneId}`));
+      });
+    }, opts.timeoutMs + 500);
+    try {
+      socket = createConnection(socketPath, () => {
+        socket?.write(request + "\n");
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      reject(new HerdrError("socket_connect", `cannot open ${socketPath}`, e));
+      return;
+    }
+    socket.on("error", (e) => {
+      clearTimeout(timer);
+      finish(() => {
+        cleanup();
+        reject(new HerdrError("socket_error", e.message, e));
+      });
+    });
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString();
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line.trim() === "") continue;
+        let env;
+        try {
+          env = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (env.id === subId && env.error) {
+          clearTimeout(timer);
+          finish(() => {
+            cleanup();
+            reject(new HerdrError(env.error.code, env.error.message));
+          });
+          return;
+        }
+        if (env.result?.type === "subscription_started") continue;
+        if (env.event !== "pane.agent_status_changed") continue;
+        const data = env.data;
+        if (!data || !data.pane_id || !data.agent_status) continue;
+        if (data.pane_id !== paneId) continue;
+        if (!want.has(data.agent_status)) continue;
+        if (opts.fromSeq !== void 0 && data.state_change_seq !== void 0 && data.state_change_seq <= opts.fromSeq) {
+          continue;
+        }
+        clearTimeout(timer);
+        finish(() => {
+          cleanup();
+          resolve(data);
+        });
+        return;
+      }
+    });
+  });
+}
+function clientFromEnv() {
+  const socketPath = process.env.HERDR_SOCKET_PATH;
+  if (!socketPath) {
+    throw new HerdrError(
+      "missing_socket_path",
+      "HERDR_SOCKET_PATH is not set; cannot reach herdr"
+    );
+  }
+  return new RealHerdrClient(socketPath);
+}
+function currentWorkspaceId() {
+  const ws = process.env.HERDR_WORKSPACE_ID;
+  if (!ws) {
+    throw new HerdrError(
+      "missing_workspace",
+      "HERDR_WORKSPACE_ID is not set; cannot create child tabs"
+    );
+  }
+  return ws;
+}
+
+// src/helper/prompt.ts
+var DEFAULT_PROMPT_BOUNDS = {
+  maxPromptAttempts: 3,
+  deliveryStallMs: 5e3
+};
+async function deliverPrompt(client, paneId, body, bounds) {
+  for (let attempt = 0; attempt < bounds.maxPromptAttempts; attempt++) {
+    const before = await client.agentGet(paneId);
+    const fromSeq = before?.state_change_seq ?? 0;
+    await client.agentPrompt(paneId, body);
+    const delivered = await waitForDelivery(client, paneId, fromSeq, bounds.deliveryStallMs);
+    if (delivered) return;
+  }
+  throw { reason: "delivery", message: `prompt not delivered after ${bounds.maxPromptAttempts} attempts` };
+}
+async function waitForDelivery(client, paneId, fromSeq, stallMs) {
+  const statuses = ["working", "blocked", "done"];
+  return client.waitForStatus(paneId, statuses, { timeoutMs: stallMs, fromSeq }).then(() => true).catch((e) => {
+    if (e instanceof HerdrError && (e.code === "wait_timeout" || e.code === "timeout")) {
+      return false;
+    }
+    throw e;
+  });
+}
+
+// src/helper/registry.ts
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { join as join2 } from "node:path";
+function fileRegistryStore(path) {
+  const file = path ?? defaultRegistryPath();
+  return {
+    async read() {
+      if (!existsSync2(file)) return {};
+      try {
+        const raw = readFileSync2(file, "utf8");
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    },
+    async write(entries) {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify(entries, null, 2));
+    }
+  };
+}
+function defaultRegistryPath() {
+  const base = process.env.HERDR_REGISTRY_PATH;
+  if (base) return base;
+  const parentPane = process.env.HERDR_PANE_ID ?? "orphan";
+  return join2(homedir2(), ".cache", "herdr-subagents", "registry", `${parentPane}.json`);
+}
+var Registry = class {
+  constructor(store, probe) {
+    this.store = store;
+    this.probe = probe;
+  }
+  store;
+  probe;
+  // Read-modify-write guard: setStatus (watch) and add (spawn) land
+  // concurrently; without serialization, overlapping reads lose a change. A
+  // promise-chain lock — each op awaits the previous tail — is enough.
+  chain = Promise.resolve();
+  serialized(run) {
+    const result = this.chain.then(run);
+    this.chain = result.then(
+      () => void 0,
+      () => void 0
+    );
+    return result;
+  }
+  async add(entry) {
+    return this.serialized(async () => {
+      const entries = await this.store.read();
+      entries[entry.pane_id] = entry;
+      await this.store.write(entries);
+    });
+  }
+  async get(paneId) {
+    const entries = await this.store.read();
+    return entries[paneId] ?? null;
+  }
+  async setStatus(paneId, status) {
+    return this.serialized(async () => {
+      const entries = await this.store.read();
+      if (entries[paneId]) {
+        entries[paneId].status = status;
+        await this.store.write(entries);
+      }
+    });
+  }
+  async remove(paneId) {
+    return this.serialized(async () => {
+      const entries = await this.store.read();
+      delete entries[paneId];
+      await this.store.write(entries);
+    });
+  }
+  // Lists every tracked child. Each entry is probed against herdr: if the pane
+  // no longer resolves, the entry is marked stale and pruned from the store so
+  // closed children don't accumulate and waste probe subprocesses on every
+  // future list/close.
+  async list() {
+    const entries = await this.store.read();
+    const result = [];
+    const stale = [];
+    for (const entry of Object.values(entries)) {
+      const snap = await this.probe(entry.pane_id);
+      if (snap === null) {
+        result.push({ ...entry, stale: true });
+        stale.push(entry.pane_id);
+      } else {
+        result.push({ ...entry, status: snap.agent_status, stale: false });
+      }
+    }
+    if (stale.length > 0) {
+      await this.serialized(async () => {
+        const current = await this.store.read();
+        for (const paneId of stale) delete current[paneId];
+        await this.store.write(current);
+      });
+    }
+    return result;
+  }
+};
+
+// src/helper/spawn.ts
+var GATE = "HERDR_SUBAGENT";
+function slugifyAgentName(label) {
+  let slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^[^a-z]+/, "").replace(/^-+|-+$/g, "");
+  if (slug.length > 32) slug = slug.slice(0, 32).replace(/-+$/, "");
+  return slug || "agent";
+}
+var CHILD_ENV_PREFIX = "HERDR_SUBAGENT_";
+function childEnv(parentEnv = process.env) {
+  const env = { [GATE]: "1" };
+  for (const [key, value] of Object.entries(parentEnv)) {
+    if (key.startsWith(CHILD_ENV_PREFIX) && value) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+var DEFAULT_BOUNDS = {
+  readinessTimeoutMs: 1e4,
+  maxRenameAttempts: 3,
+  maxPromptAttempts: 3,
+  deliveryStallMs: 5e3
+};
+async function spawnChild(input, deps) {
+  const bounds = { ...DEFAULT_BOUNDS, ...deps.bounds };
+  const { client } = deps;
+  const env = input.passThroughEnv ?? childEnv();
+  let tabId;
+  let paneId;
+  try {
+    const tab = await client.tabCreate({
+      workspaceId: input.workspaceId,
+      cwd: input.cwd,
+      label: input.label,
+      focus: false,
+      env
+    });
+    paneId = tab.pane_id;
+    tabId = tab.tab_id;
+  } catch (e) {
+    throw {
+      reason: "tab-create",
+      message: `could not create child tab: ${e instanceof Error ? e.message : String(e)}`
+    };
+  }
+  if (deps.tracking) {
+    const effectiveAgent = input.agentName ?? slugifyAgentName(input.label);
+    try {
+      await deps.tracking.add({
+        pane_id: paneId,
+        tab_id: tabId,
+        workspace_id: input.workspaceId,
+        label: input.label,
+        agent: effectiveAgent,
+        kind: input.kind,
+        agent_name: effectiveAgent,
+        status: "idle"
+      });
+    } catch {
+    }
+  }
+  const fail2 = (reason, message) => ({ reason, message, pane_id: paneId, tab_id: tabId });
+  try {
+    const readiness = await startWithReadiness(client, paneId, input, bounds);
+    if (!readiness.ok) {
+      if (readiness.reason === "timeout") {
+        throw fail2(
+          "timeout",
+          `harness never became ready within ${bounds.readinessTimeoutMs}ms \u2014 not installed or failed to start`
+        );
+      }
+      throw fail2(
+        "fast-fail",
+        `harness started and exited: ${readiness.message}`
+      );
+    }
+    if (input.agentName !== void 0) {
+      await verifyAndRename(client, paneId, input.agentName, bounds);
+    }
+    return { pane_id: paneId, tab_id: tabId };
+  } catch (e) {
+    if (deps.tracking) {
+      try {
+        await deps.tracking.remove(paneId);
+      } catch {
+      }
+    }
+    try {
+      await client.tabClose(tabId);
+    } catch {
+    }
+    if (isSpawnFailure(e)) throw { ...e, pane_id: paneId, tab_id: tabId };
+    throw fail2("name", e instanceof Error ? e.message : String(e));
+  }
+}
+async function startWithReadiness(client, paneId, input, bounds) {
+  try {
+    const agentName = input.agentName;
+    const args = agentName !== void 0 ? ["--agent", agentName, ...input.passThroughArgs ?? []] : [...input.passThroughArgs ?? []];
+    const agent = await client.agentStart({
+      name: agentName ?? slugifyAgentName(input.label),
+      kind: input.kind,
+      paneId,
+      timeoutMs: bounds.readinessTimeoutMs,
+      args
+    });
+    return { ok: true, agent };
+  } catch (e) {
+    if (e instanceof HerdrError) {
+      if (e.code === "agent_start_timeout" || e.code === "timeout") {
+        return { ok: false, reason: "timeout" };
+      }
+      return { ok: false, reason: "fast-fail", message: e.message };
+    }
+    return { ok: false, reason: "fast-fail", message: e instanceof Error ? e.message : String(e) };
+  }
+}
+async function verifyAndRename(client, paneId, expectedName, bounds) {
+  for (let attempt = 0; attempt < bounds.maxRenameAttempts; attempt++) {
+    const snap = await client.agentGet(paneId);
+    if (snap && snap.name === expectedName && snap.agent_status !== "unknown") return;
+    if (snap === null || snap.agent_status === "unknown") continue;
+    try {
+      await client.agentRename(paneId, expectedName);
+    } catch (e) {
+      throw { reason: "name", message: `could not rename agent to ${expectedName}: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+  throw { reason: "name", message: `agent name did not land after ${bounds.maxRenameAttempts} attempts` };
+}
+function isSpawnFailure(value) {
+  return typeof value === "object" && value !== null && typeof value.reason === "string" && typeof value.message === "string";
+}
+
+// src/helper/watch.ts
+import { createConnection as createConnection2 } from "node:net";
+var WatchEngine = class {
+  constructor(socketPath, store, deps) {
+    this.socketPath = socketPath;
+    this.store = store;
+    this.deps = deps;
+    this.write = deps.out ?? ((line) => process.stdout.write(line + "\n"));
+  }
+  socketPath;
+  store;
+  deps;
+  write;
+  subs = /* @__PURE__ */ new Map();
+  // tab_id → pane_id, to correlate `tab_closed` events to a tracked child.
+  tabIndex = /* @__PURE__ */ new Map();
+  fleet = null;
+  fleetBuffer = "";
+  fleetDead = false;
+  reconcileTimer = null;
+  safetyTimer = null;
+  reconnectTimer = null;
+  stopped = false;
+  async start() {
+    await this.reconcile();
+    this.openFleet();
+    this.startSafety();
+  }
+  stop() {
+    if (this.stopped) return;
+    this.stopped = true;
+    if (this.reconcileTimer) clearTimeout(this.reconcileTimer);
+    if (this.safetyTimer) clearInterval(this.safetyTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    for (const sub of this.subs.values()) {
+      sub.dead = true;
+      sub.socket?.destroy();
+    }
+    this.subs.clear();
+    this.tabIndex.clear();
+    this.fleet?.destroy();
+    this.fleet = null;
+  }
+  // Read the registry and (re)open a status subscription for every tracked
+  // child that lacks a live one. Discovery backstop — closure is handled by
+  // tab.closed, not here.
+  async reconcile() {
+    if (this.stopped) return;
+    const entries = await this.readRegistry();
+    for (const child of Object.values(entries)) {
+      const sub = this.subs.get(child.pane_id);
+      if (sub?.dead) continue;
+      if (sub?.socket) {
+        sub.label = child.label;
+        sub.tabId = child.tab_id;
+        this.tabIndex.set(child.tab_id, child.pane_id);
+        continue;
+      }
+      this.openSubscription(child);
+    }
+  }
+  // One connection per child: ONE subscribe (pane.agent_status_changed). The
+  // baseline status comes from a separate one-shot agent.get.
+  openSubscription(child) {
+    if (this.stopped) return;
+    if (this.subs.has(child.pane_id) && this.subs.get(child.pane_id)?.socket) return;
+    const sub = this.subs.get(child.pane_id) ?? {
+      label: child.label,
+      tabId: child.tab_id,
+      socket: null,
+      buffer: "",
+      live: false,
+      dead: false,
+      lastStatus: null,
+      seenReal: false
+    };
+    sub.label = child.label;
+    sub.tabId = child.tab_id;
+    sub.buffer = "";
+    sub.live = false;
+    sub.dead = false;
+    this.subs.set(child.pane_id, sub);
+    this.tabIndex.set(child.tab_id, child.pane_id);
+    let socket;
+    try {
+      socket = createConnection2(this.socketPath, () => {
+        socket.write(
+          JSON.stringify({
+            id: `sub:${child.pane_id}`,
+            method: "events.subscribe",
+            params: {
+              subscriptions: [{ type: "pane.agent_status_changed", pane_id: child.pane_id }]
+            }
+          }) + "\n"
+        );
+      });
+    } catch {
+      return;
+    }
+    sub.socket = socket;
+    socket.on("data", (chunk) => {
+      sub.buffer += chunk.toString();
+      let nl;
+      while ((nl = sub.buffer.indexOf("\n")) >= 0) {
+        const line = sub.buffer.slice(0, nl);
+        sub.buffer = sub.buffer.slice(nl + 1);
+        if (line.trim() === "") continue;
+        this.handleStatusLine(child.pane_id, sub, line);
+      }
+    });
+    socket.on("error", () => this.handleDisconnect(child.pane_id));
+    socket.on("close", () => this.handleDisconnect(child.pane_id));
+    void probeAgent(this.socketPath, child.pane_id).then((status) => {
+      if (status && !sub.dead && !this.stopped) {
+        sub.live = true;
+        this.emit(child.pane_id, sub, status);
+      }
+    });
+  }
+  handleStatusLine(paneId, sub, raw) {
+    let env;
+    try {
+      env = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (env.result?.type === "subscription_started") {
+      sub.live = true;
+      return;
+    }
+    if (env.event === "pane.agent_status_changed") {
+      const status = env.data?.agent_status;
+      if (typeof status === "string") {
+        sub.live = true;
+        this.emit(paneId, sub, status);
+      }
+      return;
+    }
+    if (env.error) sub.dead = true;
+  }
+  // Emit only on a change; a stable status is not re-sent.
+  //
+  // `unknown` is suppressed until a real status was seen: a freshly-spawned
+  // child's harness briefly reports `unknown` while booting (spawn's own
+  // verify-and-rename treats it the same way), and emitting it would read as
+  // `gone` downstream and wake the parent for a child that is fine. Once a
+  // real status landed, `unknown` is a genuine loss (agent dead, tab open) and
+  // is emitted.
+  emit(paneId, sub, status) {
+    const isUnknown = status === "unknown";
+    if (isUnknown && !sub.seenReal) return;
+    if (sub.lastStatus === status) return;
+    if (!isUnknown) sub.seenReal = true;
+    sub.lastStatus = status;
+    this.write(JSON.stringify({ pane_id: paneId, label: sub.label, status }));
+  }
+  // A status socket dropped. If it never went live it was a stale subscribe
+  // (silent dead); otherwise it is a transport blip on a real pane — clear the
+  // socket so the safety reconcile reopens it. Closure is NOT inferred here.
+  handleDisconnect(paneId) {
+    const sub = this.subs.get(paneId);
+    if (!sub || sub.dead || !sub.socket) return;
+    sub.socket.destroy();
+    sub.socket = null;
+    if (!sub.live) sub.dead = true;
+  }
+  // --- fleet: pane.created (discovery) + tab.closed (closure) ------------
+  openFleet() {
+    if (this.stopped || this.fleet) return;
+    let socket;
+    try {
+      socket = createConnection2(this.socketPath, () => {
+        socket.write(
+          JSON.stringify({
+            id: "fleet",
+            method: "events.subscribe",
+            params: {
+              subscriptions: [{ type: "pane.created" }, { type: "tab.closed" }]
+            }
+          }) + "\n"
+        );
+      });
+    } catch {
+      this.scheduleFleetReconnect();
+      return;
+    }
+    this.fleet = socket;
+    this.fleetDead = false;
+    socket.on("data", (chunk) => {
+      this.fleetBuffer += chunk.toString();
+      let nl;
+      while ((nl = this.fleetBuffer.indexOf("\n")) >= 0) {
+        const line = this.fleetBuffer.slice(0, nl);
+        this.fleetBuffer = this.fleetBuffer.slice(nl + 1);
+        if (line.trim() === "") continue;
+        let env;
+        try {
+          env = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (env.event === "pane_created") this.scheduleReconcile();
+        else if (env.event === "tab_closed" && env.data?.tab_id) this.handleClose(env.data.tab_id);
+      }
+    });
+    socket.on("error", () => this.handleFleetDeath());
+    socket.on("close", () => this.handleFleetDeath());
+  }
+  // A tracked child's tab closed. closed (deliberate helper close removed it
+  // from the registry first) vs gone (still tracked). The registry decides.
+  async handleClose(tabId) {
+    if (this.stopped) return;
+    const paneId = this.tabIndex.get(tabId);
+    if (!paneId) return;
+    const sub = this.subs.get(paneId);
+    if (!sub) return;
+    const entries = await this.readRegistry();
+    if (this.stopped) return;
+    const stillTracked = Object.prototype.hasOwnProperty.call(entries, paneId);
+    sub.dead = true;
+    sub.socket?.destroy();
+    sub.socket = null;
+    this.subs.delete(paneId);
+    this.tabIndex.delete(tabId);
+    const status = stillTracked ? "gone" : "closed";
+    this.write(JSON.stringify({ pane_id: paneId, label: sub.label, status }));
+  }
+  scheduleReconcile() {
+    if (this.stopped) return;
+    if (this.reconcileTimer) clearTimeout(this.reconcileTimer);
+    const delay = this.deps.createdDebounceMs ?? 80;
+    this.reconcileTimer = setTimeout(() => {
+      this.reconcileTimer = null;
+      void this.reconcile();
+    }, delay);
+  }
+  handleFleetDeath() {
+    if (this.stopped || this.fleetDead) return;
+    this.fleetDead = true;
+    this.fleet?.destroy();
+    this.fleet = null;
+    this.scheduleFleetReconnect();
+  }
+  scheduleFleetReconnect() {
+    if (this.stopped) return;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    const delay = this.deps.fleetReconnectMs ?? 1e3;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.stopped) return;
+      this.openFleet();
+      void this.reconcile();
+    }, delay);
+  }
+  startSafety() {
+    const interval = this.deps.safetyReconcileMs ?? 3e4;
+    if (interval <= 0) return;
+    this.safetyTimer = setInterval(() => {
+      void this.reconcile();
+    }, interval);
+  }
+  async readRegistry() {
+    try {
+      const entries = await this.store.read();
+      return entries ?? {};
+    } catch {
+      return {};
+    }
+  }
+};
+function probeAgent(socketPath, paneId) {
+  return new Promise((resolve) => {
+    const s = createConnection2(socketPath, () => {
+      s.write(JSON.stringify({ id: "probe", method: "agent.get", params: { target: paneId } }) + "\n");
+    });
+    let buf = "";
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      s.destroy();
+      resolve(v);
+    };
+    s.on("data", (d) => {
+      buf += d.toString();
+      const nl = buf.indexOf("\n");
+      if (nl >= 0) {
+        try {
+          const env = JSON.parse(buf.slice(0, nl));
+          finish(env.result?.agent?.agent_status ?? null);
+        } catch {
+          finish(null);
+        }
+      }
+    });
+    s.on("error", () => finish(null));
+    s.on("close", () => finish(null));
+    setTimeout(() => finish(null), 3e3);
+  });
+}
+function watchChildren(socketPath, deps, signal) {
+  return new Promise((resolve) => {
+    const engine = new WatchEngine(socketPath, deps.store, deps);
+    const finish = () => resolve();
+    void engine.start().then(() => {
+      if (signal?.aborted) {
+        engine.stop();
+        finish();
+        return;
+      }
+      if (signal) {
+        signal.addEventListener(
+          "abort",
+          () => {
+            engine.stop();
+            finish();
+          },
+          { once: true }
+        );
+      }
+    });
+  });
+}
+async function runWatch() {
+  const socketPath = process.env.HERDR_SOCKET_PATH;
+  if (!socketPath) {
+    throw new HerdrError(
+      "missing_socket_path",
+      "HERDR_SOCKET_PATH is not set; cannot reach herdr"
+    );
+  }
+  const store = fileRegistryStore();
+  const controller = new AbortController();
+  const onSignal = () => controller.abort();
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  try {
+    await watchChildren(socketPath, { store }, controller.signal);
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
+}
+
+// src/helper/cli.ts
+var KINDS = ["pi", "claude"];
+function isKind(v) {
+  return KINDS.includes(v);
+}
+var SPAWN_OWN_FLAGS = /* @__PURE__ */ new Set(["kind", "agent", "label", "cwd", "workspace"]);
+var SUBCOMMANDS = /* @__PURE__ */ new Set(["spawn", "prompt", "wait", "collect", "list", "close", "watch"]);
+var USAGE = "usage: helper <spawn|prompt|wait|collect|list|close|watch> [options]";
+function passthroughArgs(rawArgs) {
+  const out = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
+    if (a === void 0 || !a.startsWith("--")) continue;
+    if (a === "--") continue;
+    const key = a.slice(2);
+    if (SPAWN_OWN_FLAGS.has(key)) {
+      const next2 = rawArgs[i + 1];
+      if (next2 !== void 0 && !next2.startsWith("--")) i++;
+      continue;
+    }
+    out.push(a);
+    const next = rawArgs[i + 1];
+    if (next !== void 0 && !next.startsWith("--")) {
+      out.push(next);
+      i++;
+    }
+  }
+  return out;
+}
+function emit(obj) {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+function fail(message, code = 1) {
+  process.stderr.write(`${message}
+`);
+  process.exit(code);
+}
+function buildDeps() {
+  const client = clientFromEnv();
+  const probe = (paneId) => client.agentGet(paneId);
+  const registry = new Registry(fileRegistryStore(), probe);
+  return { client, registry };
+}
+async function runCatching(p) {
+  try {
+    await p;
+  } catch (e) {
+    if (e instanceof HerdrError) fail(e.message);
+    fail(e instanceof Error ? e.message : String(e));
+  }
+}
+async function runSpawn(args, rawArgs) {
+  const kind = args.kind;
+  if (!kind) fail("--kind is required (pi|claude)", 2);
+  if (!isKind(kind)) fail(`--kind must be one of ${KINDS.join("|")}, got ${kind}`, 2);
+  const agentName = args.agent;
+  if (agentName !== void 0 && agentName.includes("/")) {
+    fail(`--agent must be a name, not a path: ${agentName}`, 2);
+  }
+  const label = args.label;
+  if (!label) fail("--label is required", 2);
+  const cwd = args.cwd;
+  const workspaceId = args.workspace ?? currentWorkspaceId();
+  const { client, registry } = buildDeps();
+  try {
+    const result = await spawnChild(
+      { kind, agentName, label, cwd, workspaceId, passThroughArgs: passthroughArgs(rawArgs) },
+      { client, tracking: registry }
+    );
+    emit(result);
+  } catch (e) {
+    emit(e);
+    fail(
+      isSpawnFailure(e) ? `spawn failed: ${e.message}` : `spawn failed: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+}
+async function runPrompt(args) {
+  const paneId = args.paneId;
+  if (!paneId) fail("usage: helper prompt <pane_id> --body <text>", 2);
+  const body = args.body;
+  if (body === void 0) fail("--body is required", 2);
+  const { client } = buildDeps();
+  try {
+    await deliverPrompt(client, paneId, body, DEFAULT_PROMPT_BOUNDS);
+    emit({ pane_id: paneId, sent: true });
+  } catch (e) {
+    emit(e);
+    fail(
+      isSpawnFailure(e) ? `prompt failed: ${e.message}` : `prompt failed: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+}
+async function runWait(args) {
+  const paneId = args.paneId;
+  if (!paneId) fail("usage: helper wait <pane_id>", 2);
+  const { client } = buildDeps();
+  const timeout = args.timeout ? Number(args.timeout) : 0;
+  const snap = await waitChild(paneId, client, timeout);
+  emit({ pane_id: paneId, status: snap.agent_status });
+}
+async function runCollect(args) {
+  const paneId = args.paneId;
+  if (!paneId) fail("usage: helper collect <pane_id>", 2);
+  const { client, registry } = buildDeps();
+  const deps = { client, registry };
+  emit(await collectChild(paneId, deps));
+}
+async function runList() {
+  const { registry } = buildDeps();
+  const children = await registry.list();
+  emit({ children });
+}
+async function runClose(args) {
+  const tabId = args.tabId;
+  if (!tabId) fail("usage: helper close <tab_id>", 2);
+  const { client, registry } = buildDeps();
+  for (const child of await registry.list()) {
+    if (child.tab_id === tabId) await registry.remove(child.pane_id);
+  }
+  await client.tabClose(tabId);
+  emit({ tab_id: tabId, closed: true });
+}
+var spawn2 = defineCommand({
+  args: {
+    kind: { type: "string", description: "Harness kind (pi|claude)" },
+    agent: { type: "string", description: "Agent name (not a path)" },
+    label: { type: "string", description: "Tab label" },
+    cwd: { type: "string", default: process.cwd(), description: "Child working directory" },
+    workspace: { type: "string", description: "Workspace id" }
+  },
+  run: ({ args, rawArgs }) => runCatching(runSpawn(args, rawArgs))
+});
+var prompt = defineCommand({
+  args: {
+    // required:false so a missing id reaches our own usage guard (exact
+    // message + exit 2) instead of citty's default error.
+    paneId: { type: "positional", required: false, description: "Pane id" },
+    body: { type: "string", description: "Prompt body" }
+  },
+  run: ({ args }) => runCatching(runPrompt(args))
+});
+var wait = defineCommand({
+  args: {
+    paneId: { type: "positional", required: false, description: "Pane id" },
+    timeout: { type: "string", description: "Timeout in ms" }
+  },
+  run: ({ args }) => runCatching(runWait(args))
+});
+var collect = defineCommand({
+  args: {
+    paneId: { type: "positional", required: false, description: "Pane id" }
+  },
+  run: ({ args }) => runCatching(runCollect(args))
+});
+var list = defineCommand({
+  args: {},
+  run: () => runCatching(runList())
+});
+var close = defineCommand({
+  args: {
+    tabId: { type: "positional", required: false, description: "Tab id" }
+  },
+  run: ({ args }) => runCatching(runClose(args))
+});
+var watch = defineCommand({
+  args: {},
+  run: () => runCatching(runWatch())
+});
+var main = defineCommand({
+  subCommands: { spawn: spawn2, prompt, wait, collect, list, close, watch }
+});
+if (import.meta.main) {
+  const token = process.argv.slice(2)[0];
+  if (!SUBCOMMANDS.has(token ?? "")) {
+    fail(`unknown subcommand ${token ?? "(none)"}
+${USAGE}`, 2);
+  }
+  runMain(main);
+}
+export {
+  passthroughArgs
+};

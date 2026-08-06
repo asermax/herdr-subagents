@@ -1,0 +1,16 @@
+{
+  "name": "herdr-subagents",
+  "version": "0.4.0",
+  "description": "Delegate coding-agent work by spawning other agents as herdr tabs.",
+  "author": {
+    "name": "Agustín Carrasco"
+  },
+  "repository": "https://github.com/asermax/herdr-subagents",
+  "homepage": "https://github.com/asermax/herdr-subagents",
+  "license": "MIT",
+  "keywords": [
+    "delegation",
+    "subagents",
+    "herdr"
+  ]
+}
