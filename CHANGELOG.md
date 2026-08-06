@@ -1,3 +1,10 @@
+## [0.3.1](https://github.com/asermax/herdr-subagents/compare/v0.3.0...v0.3.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **build:** make the pi helper path portable across installs ([ea11afb](https://github.com/asermax/herdr-subagents/commit/ea11afb3d78e401d577c84f740d72c56cda9fa5e))
+
 # [0.3.0](https://github.com/asermax/herdr-subagents/compare/v0.2.1...v0.3.0) (2026-08-06)
 
 
