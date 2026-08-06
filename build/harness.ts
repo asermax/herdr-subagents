@@ -20,11 +20,6 @@ function readWakeFragment(harness: Harness): string {
   ).trimEnd();
 }
 
-/** Resolve the helper's absolute path inside an artifact root (build-time). */
-export function helperPath(artifactRoot: string): string {
-  return join(artifactRoot, HELPER_BIN);
-}
-
 /**
  * The per-harness map of declared token values — the token contract.
  *
@@ -34,15 +29,18 @@ export function helperPath(artifactRoot: string): string {
  *    must have an entry, or the build fails. The strong drift guard.
  *  - map -> source: every declared value must be consumed somewhere.
  */
-export function tokenMapFor(harness: Harness, artifactRoot: string): TokenMap {
+export function tokenMapFor(harness: Harness): TokenMap {
   return {
     wake: readWakeFragment(harness),
-    // Claude ships the helper under bin/ at the plugin root and expands
-    // $CLAUDE_PLUGIN_ROOT at runtime, so the token is the runtime path. pi
-    // bakes the package-dir path at build time (valid for the dev loop).
+    // Both harnesses resolve the helper at RUNTIME so a skill built anywhere
+    // (a CI build included) works on any install, not just the build host:
+    //  - claude expands $CLAUDE_PLUGIN_ROOT (set by claude at plugin load).
+    //  - pi uses $HERDR_SUBAGENT_HELPER (set by the dev loop, and by the
+    //    extension at session start from its resolved helper path), falling
+    //    back to the bare `herdr-helper` the package's `bin` puts on PATH.
     helper:
       harness === "claude"
         ? "${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN
-        : helperPath(artifactRoot),
+        : "${HERDR_SUBAGENT_HELPER:-" + HELPER_BIN + "}",
   };
 }

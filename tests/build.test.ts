@@ -16,7 +16,7 @@ describe("build, both tokens", () => {
   it("declares and consumes both {{wake}} and {{helper}} for each harness", () => {
     for (const harness of ["pi", "claude"] as const) {
       const sources = coverageSources(harness);
-      const map = tokenMapFor(harness, "/tmp/fake-root");
+      const map = tokenMapFor(harness);
       // Throws TokenNotConsumedError / UncoveredPlaceholderError on mismatch.
       expect(() => assertCoverage(sources, map)).not.toThrow();
       expect(Object.keys(map).sort()).toEqual(["helper", "wake"]);
@@ -48,12 +48,13 @@ describe("build, both tokens", () => {
 
         // The wake fragment was injected at {{wake}}.
         expect(body).toContain(wakeMarker[harness]);
-        // {{helper}} resolved: pi bakes the package-dir path at build time;
-        // claude uses the runtime $CLAUDE_PLUGIN_ROOT path so it stays portable
-        // across installs. Both also appear inside the injected wake fragment
-        // (fixpoint substitution).
+        // {{helper}} resolved to a RUNTIME path for both harnesses, so a skill
+        // built anywhere (CI included) works on any install: claude expands
+        // $CLAUDE_PLUGIN_ROOT; pi uses $HERDR_SUBAGENT_HELPER with a bare-name
+        // fallback the package bin puts on PATH. Both also appear inside the
+        // injected wake fragment (fixpoint substitution).
         const helperInSkill: Record<"pi" | "claude", string> = {
-          pi: `${root}/${HELPER_BIN}`,
+          pi: "${HERDR_SUBAGENT_HELPER:-" + HELPER_BIN + "}",
           claude: "${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN,
         };
         expect(body).toContain(helperInSkill[harness]);

@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, BeforeAgentStartEventResult } from "@earendil-works/pi-coding-agent";
 import { resolveAgents, resolveAgentByName, type AgentRecord } from "./registrar.js";
-import { registerParentRole } from "./parent-role.js";
+import { helperPath, registerParentRole } from "./parent-role.js";
 
 // herdr-subagents pi extension. This slice owns agent-resolution — reading
 // `.pi/agents/` and `.claude/agents/` directly (no event bus, no coupling to
@@ -50,6 +50,14 @@ export function _setResolveCwd(dir: string): void {
 }
 
 export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
+  // Publish the helper's resolved path into the environment so the agent's
+  // bash — the delegate skill runs `${HERDR_SUBAGENT_HELPER:-herdr-helper}` —
+  // finds the helper on any install, not just the host that built the skill.
+  // Respect an explicit override (the dev loop sets it before launching pi).
+  if (process.env.HERDR_SUBAGENT_HELPER === undefined) {
+    process.env.HERDR_SUBAGENT_HELPER = helperPath();
+  }
+
   // Lifecycle subscriptions return an unsubscribe fn, drained on shutdown.
   const unsubs: Array<() => void> = [];
 

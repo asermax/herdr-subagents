@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 
 /** Emit one complete artifact for `harness` rooted at `artifactRoot`. */
 export function emitArtifact(harness: Harness, artifactRoot: string): void {
-  const map = tokenMapFor(harness, artifactRoot);
+  const map = tokenMapFor(harness);
   const sources = coverageSources(harness);
 
   // Drift is prevented by construction: assert coverage both ways before
