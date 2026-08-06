@@ -7,16 +7,17 @@ import {
 } from "../build/substitute.ts";
 
 describe("substitute", () => {
-  it("substitutes {{wake}} and {{helper}} from the per-harness map", () => {
+  it("substitutes {{wake}}, {{helper}}, and {{invoke}} from the per-harness map", () => {
     const source =
-      "Wake via {{wake}}. Call the helper at {{helper}} to spawn.";
+      "Wake via {{wake}}. Call the helper at {{helper}} to spawn. {{invoke}}";
     const out = substitute(source, {
       wake: "your extension wakes you automatically",
       helper: "/usr/local/bin/herdr-helper",
+      invoke: "Use the subagent tool.",
     });
 
     expect(out).toBe(
-      "Wake via your extension wakes you automatically. Call the helper at /usr/local/bin/herdr-helper to spawn.",
+      "Wake via your extension wakes you automatically. Call the helper at /usr/local/bin/herdr-helper to spawn. Use the subagent tool.",
     );
   });
 
@@ -41,7 +42,7 @@ describe("substitute", () => {
     }
   });
 
-  it("errors on a placeholder that looks like a token but is not one of the two", () => {
+  it("errors on a placeholder that looks like a token but is not one of the three", () => {
     expect(() => substitute("{{version}}", {})).toThrow(UnknownTokenError);
   });
 
@@ -50,6 +51,9 @@ describe("substitute", () => {
       MissingTokenValueError,
     );
     expect(() => substitute("call {{helper}} now", { wake: "x" })).toThrow(
+      MissingTokenValueError,
+    );
+    expect(() => substitute("{{invoke}}", { wake: "x" })).toThrow(
       MissingTokenValueError,
     );
   });

@@ -10,7 +10,7 @@ Children are real herdr tabs a human can see and steer. A child can delegate fur
 pi install npm:@asermax/pi-herdr-subagents
 ```
 
-The package registers a `delegate` skill and an extension. The extension shows fleet status; the bundled `herdr-helper` binary handles spawn, prompt, collect, and close.
+The package registers a `delegate` skill, an extension, and a `subagent` tool. The extension shows fleet status and auto-wakes you when a child finishes; the `subagent` tool wraps the bundled `herdr-helper` binary so you call a structured tool (spawn, prompt, collect, close, list) instead of shelling out to bash.
 
 ## Use
 

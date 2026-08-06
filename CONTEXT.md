@@ -15,7 +15,7 @@ The agent a parent spawned. Used in code, docs, and the parent's voice. The chil
 _Avoid_: spawning child as a synonym for a different concept; do not swap child and subagent freely.
 
 **subagent**:
-Reserved for the child's own self-view (its onboarding voice) and for names that already contain the word (`HERDR_SUBAGENT`, the package names). Not a generic synonym for child.
+Reserved for the child's own self-view (its onboarding voice), for names that already contain the word (`HERDR_SUBAGENT`, the package names), and for the pi tool that wraps the helper. Not a generic synonym for child.
 _Avoid_: using subagent where child is meant.
 
 **human**:
@@ -31,8 +31,11 @@ _Avoid_: runtime, backend.
 A parent spawning a child to do separable work. One tab, one task.
 
 **the helper**:
-The CLI that wraps herdr for the delegation lifecycle (`spawn`, `prompt`, `wait`, `collect`, `list`, `close`, `watch`). Invoked over bash; the complete interface to delegation.
-_Avoid_: the primitive, the tool, the wrapper.
+The CLI that wraps herdr for the delegation lifecycle (`spawn`, `prompt`, `wait`, `collect`, `list`, `close`, `watch`). On claude it is the complete interface to delegation, invoked over bash. On pi it is wrapped by the `subagent` tool — the model calls the tool, the tool spawns the helper.
+_Avoid_: the primitive, the wrapper.
+
+**the tool**:
+The `subagent` tool on pi — a single LLM-callable tool that wraps the full helper surface. Takes `command` (spawn|prompt|wait|collect|list|close) and a flat `options` object. Registered by the pi extension; replaces bash helper calls on pi. Claude has no equivalent and uses the helper over bash.
 
 **the gate**:
 `HERDR_SUBAGENT=1`, the environment variable whose presence means "this session is a child". Implementation-only: a contract between the helper (which sets it) and the injection hook (which senses it). It appears in no agent-facing file.
@@ -57,7 +60,7 @@ Reading a child's last assistant message and returning it as a structured payloa
 _Avoid_: read, fetch.
 
 **token**:
-A build substitution placeholder in the shared skill source, replaced per harness at build time. Exactly two exist: `{{wake}}` (the content divergence for how a parent is woken) and `{{helper}}` (the helper's absolute path, resolved per artifact root at build time). The build errors on any unknown token.
+A build substitution placeholder in the shared skill source, replaced per harness at build time. Exactly three exist: `{{wake}}` (the content divergence for how a parent is woken), `{{helper}}` (the helper's absolute path, resolved per artifact root at build time), and `{{invoke}}` (the content divergence for how commands are invoked — the `subagent` tool on pi, bash on claude). The build errors on any unknown token.
 
 **wake-then-collect**:
 The protocol shape: a wake brings the parent back; the parent then runs collect deliberately. The wake and the payload are deliberately separate so a burst of finishing children cannot flood the parent's context.

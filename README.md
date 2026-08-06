@@ -27,16 +27,17 @@ from a per-harness map, and emits two complete artifacts into `build/out/`
 ## The token contract
 
 Source is readable Markdown with substitution tokens. The token set is exactly
-two (spec §9):
+three:
 
 | Token        | Value                                                                                  |
 | ------------ | -------------------------------------------------------------------------------------- |
 | `{{wake}}`   | The per-harness wake fragment (`src/skills/delegate/{pi,claude}.md`).                  |
 | `{{helper}}` | The helper's absolute path, resolved per artifact root at build time. |
+| `{{invoke}}` | The per-harness command-invocation fragment (`src/skills/delegate/invoke-{pi,claude}.md`). |
 
 The build:
 
-- substitutes `{{wake}}` and `{{helper}}` from a per-harness map into each artifact;
+- substitutes `{{wake}}`, `{{helper}}`, and `{{invoke}}` from a per-harness map into each artifact;
 - **errors on any unknown token** (no silent passthrough of a misspelled `{{...}}`);
 - **asserts token coverage in both directions** — every map entry is consumed in
   source, and every `{{...}}` in source has a map entry;

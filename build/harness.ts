@@ -20,6 +20,14 @@ function readWakeFragment(harness: Harness): string {
   ).trimEnd();
 }
 
+/** Read the per-harness invoke fragment that injects into {{invoke}}. */
+function readInvokeFragment(harness: Harness): string {
+  return readFileSync(
+    join(srcDir, "skills", "delegate", `invoke-${harness}.md`),
+    "utf8",
+  ).trimEnd();
+}
+
 /**
  * The per-harness map of declared token values — the token contract.
  *
@@ -32,12 +40,16 @@ function readWakeFragment(harness: Harness): string {
 export function tokenMapFor(harness: Harness): TokenMap {
   return {
     wake: readWakeFragment(harness),
+    invoke: readInvokeFragment(harness),
     // Both harnesses resolve the helper at RUNTIME so a skill built anywhere
     // (a CI build included) works on any install, not just the build host:
     //  - claude expands $CLAUDE_PLUGIN_ROOT (set by claude at plugin load).
     //  - pi uses $HERDR_SUBAGENT_HELPER (set by the dev loop, and by the
     //    extension at session start from its resolved helper path), falling
     //    back to the bare `herdr-helper` the package's `bin` puts on PATH.
+    // On pi the invoke fragment uses the `subagent` tool, not bash — but the
+    // wake fragment still references {{helper}} (the extension's watch spawn),
+    // so the token stays in both maps.
     helper:
       harness === "claude"
         ? "${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN

@@ -5,7 +5,7 @@ export class UnknownTokenError extends Error {
   readonly token: string;
 
   constructor(token: string) {
-    super(`Unknown substitution token ${token}. Known tokens: {{wake}}, {{helper}}.`);
+    super(`Unknown substitution token ${token}. Known tokens: {{wake}}, {{helper}}, {{invoke}}.`);
     this.name = "UnknownTokenError";
     this.token = token;
   }
@@ -32,7 +32,7 @@ export class TokenNotConvergedError extends Error {
 
 function substituteOnce(source: string, map: TokenMap): string {
   return source.replace(TOKEN_PATTERN, (full, name: string) => {
-    if (name !== "wake" && name !== "helper") {
+    if (name !== "wake" && name !== "helper" && name !== "invoke") {
       throw new UnknownTokenError(full);
     }
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, BeforeAgentStartEventResult } from "@earendil-works/pi-coding-agent";
 import { resolveAgents, resolveAgentByName, type AgentRecord } from "./registrar.js";
 import { helperPath, registerParentRole } from "./parent-role.js";
+import { subagentTool } from "./tool.js";
 
 // herdr-subagents pi extension. This slice owns agent-resolution — reading
 // `.pi/agents/` and `.claude/agents/` directly (no event bus, no coupling to
@@ -132,6 +133,11 @@ export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
       }
     }
   });
+
+  // The `subagent` tool — one LLM-callable tool wrapping the full helper
+  // surface (spawn, prompt, wait, collect, list, close). Registered
+  // unconditionally: any session — parent or child — can delegate.
+  pi.registerTool(subagentTool);
 
   // Parent-side role: spawn `helper watch`, summarize tracked children into
   // one status widget above the input, and wake on terminal-only states. Pushes its

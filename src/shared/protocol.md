@@ -20,7 +20,9 @@ When a message carries a skill invocation (any `/skill:...` or `/...` command), 
 
 # Delegate
 
-You drive subagents through a helper CLI that wraps herdr. The helper handles the fragile parts — verifying the spawn landed, confirming the prompt was delivered, tracking pane and tab ids — so you treat each helper command as trustworthy and act on what it reports. It is invoked by absolute path, resolved per artifact root at build time; the shared source carries the path as a token and the build substitutes it.
+You drive subagents through a single interface that wraps herdr. It handles the fragile parts — verifying the spawn landed, confirming the prompt was delivered, tracking pane and tab ids — so you treat each command as trustworthy and act on what it reports.
+
+{{invoke}}
 
 All children are herdr tabs in your workspace. One tab, one task.
 
@@ -32,35 +34,23 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 
 ## Spawn
 
-```
-{{helper}} spawn --kind <pi|claude> [--agent <name>] --label "<title>"
-```
-
-- `--kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
-- `--agent <name>` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in the project's agent files, never a path.
+- `kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
+- `agent` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in the project's agent files, never a path.
 - The label is final; a child never renames its own tab.
 
-`{{helper}} spawn` returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the helper closes the half-created tab and reports; surface that to the human rather than retrying blindly.
+Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly.
 
 ## Prompt
 
 Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it.
 
-```
-{{helper}} prompt <pane_id> --body "<supervisor-agent>… your task …</supervisor-agent>"
-```
-
-Delivery is verified: the helper watches for the child to act on the prompt and resends if the first send is dropped.
+Delivery is verified: the interface watches for the child to act on the prompt and resends if the first send is dropped.
 
 {{wake}}
 
 ## Collect
 
 When a child finishes, you are woken to collect it.
-
-```
-{{helper}} collect <pane_id>
-```
 
 Returns `{pane_id, label, agent, status, message?, error?}`. `status` reflects herdr's state, **not** task success — a child that gives up still reaches `done`. Read `message` and judge the result yourself.
 
@@ -72,21 +62,17 @@ Once you no longer need a child, you can close it.
 
 ## Close
 
-```
-{{helper}} close <tab_id>
-```
-
 Close a child once you have its result and no longer need it. Closing before spawning the next batch keeps the fleet clean.
 
 ## The fleet
 
-Run `{{helper}} list` to see every tracked child and its status. A wake can be missed; `list` is the durable backstop you run on demand, so a missed wake is never fatal. Run it whenever you are unsure what is outstanding.
+Run `list` to see every tracked child and its status. A wake can be missed; `list` is the durable backstop you run on demand, so a missed wake is never fatal. Run it whenever you are unsure what is outstanding.
 
 A child that stalls has no automatic timeout. Surface it to the human as a fleet item — do not kill it.
 
 ## Inspection (discouraged)
 
-The helper is your complete interface. If it reports something you cannot act on, surface the pane to the human rather than reaching past it. `herdr --help` lists herdr's raw commands for a genuine emergency; prefer handing the pane to the human over running herdr yourself.
+The interface is your complete surface. If it reports something you cannot act on, surface the pane to the human rather than reaching past it. `herdr --help` lists herdr's raw commands for a genuine emergency; prefer handing the pane to the human over running herdr yourself.
 
 ## Nesting
 

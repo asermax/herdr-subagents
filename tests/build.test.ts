@@ -9,17 +9,17 @@ import { assertCoverage } from "../build/coverage.ts";
 
 /**
  * Not a build-output diff test. This asserts the token contract holds end to
- * end: both tokens are declared and consumed (coverage), and emit succeeds
+ * end: all three tokens are declared and consumed (coverage), and emit succeeds
  * with every placeholder resolved.
  */
-describe("build, both tokens", () => {
-  it("declares and consumes both {{wake}} and {{helper}} for each harness", () => {
+describe("build, all tokens", () => {
+  it("declares and consumes {{wake}}, {{helper}}, and {{invoke}} for each harness", () => {
     for (const harness of ["pi", "claude"] as const) {
       const sources = coverageSources(harness);
       const map = tokenMapFor(harness);
       // Throws TokenNotConsumedError / UncoveredPlaceholderError on mismatch.
       expect(() => assertCoverage(sources, map)).not.toThrow();
-      expect(Object.keys(map).sort()).toEqual(["helper", "wake"]);
+      expect(Object.keys(map).sort()).toEqual(["helper", "invoke", "wake"]);
     }
   });
 
@@ -61,6 +61,13 @@ describe("build, both tokens", () => {
         // No placeholder survives anywhere in the emitted artifact.
         expect(body).not.toMatch(/\{\{wake\}\}/);
         expect(body).not.toMatch(/\{\{helper\}\}/);
+        expect(body).not.toMatch(/\{\{invoke\}\}/);
+        // The invoke fragment was injected at {{invoke}}.
+        const invokeMarker: Record<"pi" | "claude", string> = {
+          pi: "`subagent` tool",
+          claude: "CLI invoked over bash",
+        };
+        expect(body).toContain(invokeMarker[harness]);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

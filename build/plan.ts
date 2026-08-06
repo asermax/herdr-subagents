@@ -64,6 +64,7 @@ export function filePlan(harness: Harness): EmitFile[] {
       { dest: "extension/index.ts", type: "copy", src: "extension/index.ts" },
       { dest: "extension/parent-role.ts", type: "copy", src: "extension/parent-role.ts" },
       { dest: "extension/registrar.ts", type: "copy", src: "extension/registrar.ts" },
+      { dest: "extension/tool.ts", type: "copy", src: "extension/tool.ts" },
       // The helper binary, bundled to a single executable at the package root
       // so the extension (and the {{helper}} token) can spawn it by absolute
       // path. herdr-helper resolves relative to the package root.
@@ -159,9 +160,13 @@ function piManifest(version: string): string {
         },
         peerDependencies: {
           "@earendil-works/pi-coding-agent": "*",
+          typebox: "*",
         },
         peerDependenciesMeta: {
           "@earendil-works/pi-coding-agent": {
+            optional: true,
+          },
+          typebox: {
             optional: true,
           },
         },
@@ -224,11 +229,17 @@ function claudeMarketplace(version: string): string {
  * The source files that participate in token coverage for a harness — the set
  * the per-harness map is asserted against in both directions before any write.
  *
- * Both harnesses substitute the shared protocol (the parent-facing body). On
- * claude the substitution happens inside a `generate` step (frontmatter is
- * prepended), so coverage cannot be inferred from the emit type alone; it is
- * declared here instead.
+ * Includes the shared protocol (the parent-facing body) plus the per-harness
+ * wake and invoke fragments. The fragments are injected as token values, but
+ * they themselves contain tokens (the wake fragment references {{helper}} for
+ * the watch/wait spawn; the claude invoke fragment references {{helper}} for
+ * bash paths) — so they must be in the coverage set to satisfy the map→source
+ * direction.
  */
-export function coverageSources(_harness: Harness): string[] {
-  return [readSrc(PROTOCOL)];
+export function coverageSources(harness: Harness): string[] {
+  return [
+    readSrc(PROTOCOL),
+    readSrc(`skills/delegate/${harness}.md`),
+    readSrc(`skills/delegate/invoke-${harness}.md`),
+  ];
 }

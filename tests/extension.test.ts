@@ -43,6 +43,7 @@ interface FakePi {
   on: ReturnType<typeof vi.fn>;
   registerFlag: ReturnType<typeof vi.fn>;
   getFlag: ReturnType<typeof vi.fn>;
+  registerTool: ReturnType<typeof vi.fn>;
   events: {
     on: ReturnType<typeof vi.fn>;
     emit: ReturnType<typeof vi.fn>;
@@ -53,6 +54,8 @@ interface FakePi {
   flags: Map<string, RegisteredFlag>;
   /** Values pi reconciled from CLI argv (seeded by a test to mimic arg parsing). */
   flagValues: Map<string, boolean | string>;
+  /** Tools registered via pi.registerTool, keyed by name. */
+  tools: Map<string, unknown>;
 }
 
 /**
@@ -68,6 +71,8 @@ function createFakePi(): FakePi {
   const flags = new Map<string, RegisteredFlag>();
   const flagValues = new Map<string, boolean | string>();
 
+  const tools = new Map<string, unknown>();
+
   return {
     on: vi.fn((event: string, handler: CapturedHandler) => {
       handlers.set(event, handler);
@@ -80,6 +85,9 @@ function createFakePi(): FakePi {
       }
     }),
     getFlag: vi.fn((name: string) => flagValues.get(name)),
+    registerTool: vi.fn((tool: { name: string }) => {
+      tools.set(tool.name, tool);
+    }),
     events: {
       on: vi.fn((channel: string, handler: (data: unknown) => void) => {
         busHandlers.set(channel, handler);
@@ -105,6 +113,7 @@ function createFakePi(): FakePi {
     busHandlers,
     flags,
     flagValues,
+    tools,
   };
 }
 
@@ -157,6 +166,17 @@ describe("extension factory", () => {
     extension(pi as any);
 
     expect(pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
+  });
+
+  it("registers the 'subagent' tool at factory time", () => {
+    const pi = createFakePi();
+    extension(pi as any);
+
+    expect(pi.registerTool).toHaveBeenCalledTimes(1);
+    expect(pi.registerTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "subagent" }),
+    );
+    expect(pi.tools.get("subagent")).toBeDefined();
   });
 });
 
