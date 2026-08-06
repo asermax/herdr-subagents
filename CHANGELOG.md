@@ -1,3 +1,10 @@
+## [0.3.2](https://github.com/asermax/herdr-subagents/compare/v0.3.1...v0.3.2) (2026-08-06)
+
+
+### Bug Fixes
+
+* **watch:** don't emit `unknown` for a still-booting child ([149f2ea](https://github.com/asermax/herdr-subagents/commit/149f2eafb7296aabc003fa67e033aa324c5f1168))
+
 ## [0.3.1](https://github.com/asermax/herdr-subagents/compare/v0.3.0...v0.3.1) (2026-08-06)
 
 
