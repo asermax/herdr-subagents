@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/asermax/herdr-subagents/compare/v0.2.1...v0.3.0) (2026-08-06)
+
+
+### Features
+
+* **helper:** drive watch from event subscriptions, not polling ([fa04f15](https://github.com/asermax/herdr-subagents/commit/fa04f1592bf670ec4811923a855420eea25845a0))
+
 ## [0.2.1](https://github.com/asermax/herdr-subagents/compare/v0.2.0...v0.2.1) (2026-08-06)
 
 
