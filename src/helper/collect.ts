@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { AgentSnapshot, HerdrClient } from "./herdr-types.js";
+import type { AgentSnapshot, AgentStatus, HerdrClient } from "./herdr-types.js";
 import type { Registry } from "./registry.js";
 
 // collect: read the child's last assistant message from its own session log
@@ -81,8 +81,12 @@ export async function collectChild(
   const status = normalizeStatus(snap.agent_status);
   const payload: CollectPayload = { ...base, status };
   if (status === "blocked") {
-    // Non-terminal and benign: the child is still working or waiting on a
-    // human. No message to extract.
+    // Nothing to extract — the child is stalled on a dialog, mid-turn. Ack it:
+    // the parent has now been told, so a wait it arms next watches for the
+    // child RESUMING rather than firing on this same block (ADR-0008).
+    if (snap.state_change_seq !== undefined) {
+      await registry.setAcked(paneId, snap.state_change_seq, "blocked");
+    }
     return payload;
   }
 
@@ -114,6 +118,11 @@ export async function collectChild(
   payload.message = message;
   payload.ask = message.includes(SUBAGENT_ASK);
   await registry.setStatus(paneId, snap.agent_status);
+  // The parent has now seen this state: ack it so a wait armed afterwards
+  // waits for the NEXT turn instead of firing on this one again (ADR-0008).
+  if (snap.state_change_seq !== undefined) {
+    await registry.setAcked(paneId, snap.state_change_seq, snap.agent_status);
+  }
   return payload;
 }
 
@@ -239,25 +248,128 @@ function defaultResolveClaudeSession(uuid: string): string | undefined {
   return undefined;
 }
 
-// `wait`: blocks until the child reaches a terminal state (done|gone). `blocked`
-// is non-terminal and benign — wait does NOT return on it. Speaks the socket.
+// `wait`: blocks until there is something for the parent to do about the child
+// — the turn ended (`done`, or `idle` once the tab has been seen), it stalled on
+// a dialog (`blocked`), it resumed from one (`working`, only when the parent was
+// last told `blocked`), or it is gone (`unknown`). Speaks the socket.
 //
-// herdr's `done` persists until acknowledged (focus or the next prompt), so a
-// child that is *already* `done` from a previous turn would resolve the wait
-// instantly on a stale `done`. To distinguish "already done" from "just
-// finished," capture the pre-wait `state_change_seq` and pass it as `fromSeq`:
-// the lingering `done` (seq at or below the captured value) is filtered
-// client-side, and only a genuinely new transition resolves. Mirrors
-// sendPromptWithDelivery in spawn.ts.
+// The baseline is what the parent has already been told (`acked`), written by
+// `prompt`, `collect` and `wait` itself. Anything at or below it is a state the
+// parent has seen — herdr's `done` lingers until acknowledged, so without the
+// baseline a stale `done` would resolve the wait instantly.
+//
+// Three things can hide a wake, and the loop below answers all three
+// (ADR-0008):
+//   - the state can land BEFORE the subscription opens (a turn that finishes
+//     between `prompt` and the arming of `wait` stands in `done` and emits
+//     nothing more), so each pass probes before it waits;
+//   - a status event carries no sequence and can be missed entirely, so the
+//     probe — not the event — decides what to report;
+//   - a subscription can stop delivering without closing, so the wait never
+//     blocks longer than one re-probe window on the event stream alone.
+export interface WaitAck {
+  seq?: number | undefined;
+  status?: AgentStatus | undefined;
+}
+
+export interface WaitOutcome {
+  snapshot: AgentSnapshot;
+  // True when the budget ran out with nothing new: "still working, re-arm".
+  // The wake channel always ends with a report, never a bare error.
+  timed_out: boolean;
+}
+
+// Longest a single pass trusts the event stream before re-probing. Not a poll
+// of the child's state — the floor under a subscription that goes quiet.
+const REPROBE_WINDOW_MS = 60_000;
+const DEFAULT_WAIT_MS = 3_600_000;
+
 export async function waitChild(
   paneId: string,
   client: HerdrClient,
   timeoutMs = 0,
-): Promise<AgentSnapshot> {
-  const before = await client.agentGet(paneId);
-  const fromSeq = before?.state_change_seq ?? 0;
-  return client.waitForStatus(paneId, ["done", "unknown"], {
-    timeoutMs: timeoutMs || 3_600_000,
-    fromSeq,
-  });
+  acked: WaitAck = {},
+): Promise<WaitOutcome> {
+  const deadline = Date.now() + (timeoutMs || DEFAULT_WAIT_MS);
+  const statuses = waitStatuses(acked.status);
+  // With nothing acked there is no way to tell a state the parent has seen from
+  // a new one, so the first probe becomes the baseline: the wait then reports
+  // the next change rather than whatever the child happens to be doing now.
+  let baseSeq = acked.seq;
+  let last: AgentSnapshot = { ...GONE_SNAPSHOT, pane_id: paneId };
+
+  for (;;) {
+    const snap = await probe(client, paneId);
+    if (snap === null) return { snapshot: last, timed_out: false };
+    last = snap;
+    if (baseSeq === undefined) baseSeq = snap.state_change_seq ?? 0;
+    else if (isWake(snap, baseSeq, acked.status)) return { snapshot: snap, timed_out: false };
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { snapshot: last, timed_out: true };
+
+    // Wait on the event stream, but never for longer than a re-probe window:
+    // if the subscription goes quiet — or dies without closing — the next pass
+    // reads the real state anyway. A socket error is not fatal for the same
+    // reason.
+    const event = await client
+      .waitForStatus(paneId, statuses, {
+        timeoutMs: Math.min(remaining, REPROBE_WINDOW_MS),
+        fromSeq: baseSeq,
+      })
+      .catch(() => null);
+
+    // An event is a state the child really entered, so report it rather than
+    // re-reading and risking a state that has already moved on. herdr's status
+    // events carry no sequence, so fill that in for the ack.
+    if (event !== null) {
+      const seq = event.state_change_seq ?? (await probe(client, paneId))?.state_change_seq;
+      return {
+        snapshot: seq === undefined ? event : { ...event, state_change_seq: seq },
+        timed_out: false,
+      };
+    }
+  }
+}
+
+// A pane with no detected agent is usually gone (closed, crashed), but
+// detection also drops transiently — so confirm before calling it that.
+async function probe(client: HerdrClient, paneId: string): Promise<AgentSnapshot | null> {
+  const snap = await client.agentGet(paneId).catch(() => null);
+  if (snap !== null) return snap;
+  await sleep(NULL_PROBE_RETRY_MS);
+  return client.agentGet(paneId).catch(() => null);
+}
+
+// How long to wait before confirming that a pane with no detected agent is
+// really gone rather than momentarily undetected.
+const NULL_PROBE_RETRY_MS = 750;
+
+// The states the event stream is asked for. `working` joins them only as a
+// resume signal: the parent was told the child is blocked and needs to know
+// when it starts moving again.
+function waitStatuses(ackedStatus: AgentStatus | undefined): AgentStatus[] {
+  const statuses: AgentStatus[] = ["done", "idle", "blocked", "unknown"];
+  if (ackedStatus === "blocked") statuses.push("working");
+  return statuses;
+}
+
+// A snapshot for a pane that no longer resolves. `unknown` normalizes to `gone`
+// downstream (collect, the pi parent role).
+const GONE_SNAPSHOT: AgentSnapshot = {
+  pane_id: "",
+  tab_id: "",
+  workspace_id: "",
+  name: "",
+  agent: "",
+  agent_status: "unknown",
+};
+
+// Is this state something the parent has not been told and should act on? Any
+// state the child stops working in qualifies; `working` qualifies only as the
+// resume from a block the parent already knows about.
+function isWake(snap: AgentSnapshot, baseSeq: number, ackedStatus?: AgentStatus): boolean {
+  if ((snap.state_change_seq ?? 0) <= baseSeq) return false;
+  if (snap.agent_status !== "working") return true;
+  return ackedStatus === "blocked";
 }

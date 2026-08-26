@@ -19,6 +19,15 @@ export interface RegistryEntry {
   agent_name: string;
   // May be stale; `list` refreshes it.
   status: AgentStatus;
+  // The last `state_change_seq` the parent has been told about: set by `prompt`
+  // (the delivery receipt), `collect` (the state it read), and `wait` (what it
+  // reported). `wait` uses it as its baseline, so a turn that finishes before
+  // the wait arms is still a wake instead of a hang (ADR-0008).
+  acked_seq?: number;
+  // The status at that sequence, when it matters: a parent last told `blocked`
+  // must also be woken when the child RESUMES, which is the one case where
+  // `working` is a wake.
+  acked_status?: AgentStatus;
 }
 
 export interface ListedChild extends RegistryEntry {
@@ -97,6 +106,19 @@ export class Registry {
       const entries = await this.store.read();
       if (entries[paneId]) {
         entries[paneId].status = status;
+        await this.store.write(entries);
+      }
+    });
+  }
+
+  async setAcked(paneId: string, seq: number, status?: AgentStatus): Promise<void> {
+    return this.serialized(async () => {
+      const entries = await this.store.read();
+      const entry = entries[paneId];
+      if (entry) {
+        entry.acked_seq = seq;
+        if (status === undefined) delete entry.acked_status;
+        else entry.acked_status = status;
         await this.store.write(entries);
       }
     });

@@ -51,6 +51,13 @@ export interface HerdrClient {
   agentGet(target: string): Promise<AgentSnapshot | null>;
   agentRename(target: string, name: string): Promise<void>;
   agentPrompt(target: string, body: string): Promise<void>;
+  // Terminal snapshot of the pane, as text. The only screen read in the
+  // system: what a blocked child is waiting on lives on its screen and nowhere
+  // else (the session log does not carry an unanswered dialog).
+  agentRead(target: string, opts: { lines: number }): Promise<string>;
+  // Key presses, not text. Answering a dialog is picking an option; sending a
+  // prompt body is `agentPrompt`.
+  agentSendKeys(target: string, keys: readonly string[]): Promise<void>;
   // One-shot socket wait: resolves when the pane reaches one of the statuses,
   // or rejects on timeout. `fromSeq` lets the caller wait for a change after a
   // known sequence value rather than any matching status.
@@ -80,4 +87,8 @@ export class HerdrError extends Error {
 export type ReadinessResult =
   | { ok: true; agent: AgentSnapshot }
   | { ok: false; reason: "timeout" }
+  // herdr's `agent_not_ready`: the harness IS running and detected, sitting on
+  // a startup dialog (a trust prompt, an approval). Distinct from fast-fail —
+  // the child is alive, named, and one keypress from ready.
+  | { ok: false; reason: "blocked"; message: string }
   | { ok: false; reason: "fast-fail"; message: string };

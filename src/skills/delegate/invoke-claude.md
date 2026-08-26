@@ -7,4 +7,6 @@ The helper is a CLI invoked over bash by absolute path:
 {{helper}} collect <pane_id>
 {{helper}} close <tab_id>
 {{helper}} list
+{{helper}} read <pane_id> [--lines <n>]
+{{helper}} unblock <pane_id> --keys "<key> [key ...]"
 ```

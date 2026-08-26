@@ -123,8 +123,24 @@ describe("CLI value-bearing --label", () => {
   });
 });
 
+describe("CLI unblock key validation", () => {
+  it("requires --keys", async () => {
+    const { code, stderr } = await runCli(["unblock", "w1Z:p1"], { HERDR_SOCKET_PATH: "" });
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--keys is required/);
+  });
+
+  it("passes key names through to herdr, which is the authority on the set", async () => {
+    const { code, stderr } = await runCli(["unblock", "w1Z:p1", "--keys", "1 enter"], {
+      HERDR_SOCKET_PATH: "",
+    });
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/HERDR_SOCKET_PATH/);
+  });
+});
+
 describe("CLI help surface", () => {
-  it("lists the six subcommands in the usage error", async () => {
+  it("lists every subcommand in the usage error", async () => {
     const { stderr } = await runCli([]);
     expect(stderr).toMatch(/spawn/);
     expect(stderr).toMatch(/prompt/);
@@ -132,6 +148,8 @@ describe("CLI help surface", () => {
     expect(stderr).toMatch(/collect/);
     expect(stderr).toMatch(/list/);
     expect(stderr).toMatch(/close/);
+    expect(stderr).toMatch(/read/);
+    expect(stderr).toMatch(/unblock/);
     expect(stderr).toMatch(/watch/);
   });
 });
@@ -158,6 +176,13 @@ describe("CLI positional id extraction", () => {
 
   it("wait extracts the pane_id", async () => {
     const { code, stderr } = await runCli(["wait", "w1Z:p1"], { HERDR_SOCKET_PATH: "" });
+    expect(code).toBe(1);
+    expect(stderr).not.toMatch(/usage/);
+    expect(stderr).toMatch(/HERDR_SOCKET_PATH/);
+  });
+
+  it("read extracts the pane_id", async () => {
+    const { code, stderr } = await runCli(["read", "w1Z:p1"], { HERDR_SOCKET_PATH: "" });
     expect(code).toBe(1);
     expect(stderr).not.toMatch(/usage/);
     expect(stderr).toMatch(/HERDR_SOCKET_PATH/);

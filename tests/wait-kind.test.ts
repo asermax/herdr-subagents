@@ -49,35 +49,166 @@ describe("spawn --kind restriction", () => {
 });
 
 describe("wait", () => {
-  it("returns on a terminal state and not on blocked", async () => {
+  it("returns when the child stops working, and never on working", async () => {
     const server = new StubHerdrServer();
     await server.start();
     try {
       const client = new FakeHerdrClient({ socketPath: server.socketPath });
-      // Script blocked first (must NOT return), then done.
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "working", state_change_seq: 5 },
+      };
       server.script([
         { paneId: "w1Z:p1", status: "done", seq: 7 } as ScriptedEvent,
       ]);
-      const snap = await waitChild("w1Z:p1", client, 2000);
-      // waitChild asks for done|unknown only — blocked is never in the match
-      // set, so it could not have returned on it.
+      const snap = (await waitChild("w1Z:p1", client, 2000)).snapshot;
       const wait = client.calls.find((c: Call) => c.method === "events.wait")!;
-      expect(wait.args.statuses).toEqual(["done", "unknown"]);
+      // Every state that ends a turn is in the match set; `working` is not.
+      expect(wait.args.statuses).toEqual(["done", "idle", "blocked", "unknown"]);
+      expect(wait.args.statuses).not.toContain("working");
       expect(snap.agent_status).toBe("done");
     } finally {
       await server.close();
     }
   });
 
-  it("does not include blocked in the wait match set", async () => {
+  it("returns on blocked so the parent can answer the dialog", async () => {
     const server = new StubHerdrServer();
     await server.start();
     try {
       const client = new FakeHerdrClient({ socketPath: server.socketPath });
-      server.script([{ paneId: "w1Z:p1", status: "done", seq: 3 }]);
-      await waitChild("w1Z:p1", client, 2000);
+      // A child that hits an approval prompt mid-run must wake its parent —
+      // nobody else is watching that tab.
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "working", state_change_seq: 5 },
+      };
+      server.script([{ paneId: "w1Z:p1", status: "blocked", seq: 7 } as ScriptedEvent]);
+      const snap = (await waitChild("w1Z:p1", client, 2000)).snapshot;
+      expect(snap.agent_status).toBe("blocked");
+    } finally {
+      await server.close();
+    }
+  });
+
+  // The wake this used to lose: the turn finishes between `prompt` and the
+  // arming of `wait`, so the child stands in `done` and emits no further event.
+  // The acked sequence from the prompt receipt makes that standing state new.
+  it("returns immediately when the turn ended before the wait was armed", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "done", state_change_seq: 9 },
+      };
+      // Nothing is streamed: the only evidence is the standing `done`.
+      const snap = (await waitChild("w1Z:p1", client, 300, { seq: 6 })).snapshot;
+      expect(snap.agent_status).toBe("done");
+      expect(snap.state_change_seq).toBe(9);
+      // Answered from the probe — no subscription was needed.
+      expect(client.calls.find((c: Call) => c.method === "events.wait")).toBeUndefined();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns on a standing idle — a seen child's finished turn reads idle, not done", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "idle", state_change_seq: 9 },
+      };
+      const snap = (await waitChild("w1Z:p1", client, 300, { seq: 6 })).snapshot;
+      expect(snap.agent_status).toBe("idle");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps waiting while the child is still working", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "working", state_change_seq: 9 },
+      };
+      server.script([{ paneId: "w1Z:p1", status: "done", seq: 10 } as ScriptedEvent]);
+      const snap = (await waitChild("w1Z:p1", client, 2000, { seq: 6 })).snapshot;
+      expect(snap.agent_status).toBe("done");
+      // A working child is mid-turn: the wait subscribed instead of answering.
+      expect(client.calls.find((c: Call) => c.method === "events.wait")).toBeDefined();
+    } finally {
+      await server.close();
+    }
+  });
+
+  // The parent was told the child is blocked and asked the human to answer it.
+  // It then needs to know the human did — that is the one case where `working`
+  // is a wake.
+  it("wakes on the resume from a block the parent already knows about", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "working", state_change_seq: 7 },
+      };
+      const outcome = await waitChild("w1Z:p1", client, 300, { seq: 6, status: "blocked" });
+      expect(outcome.snapshot.agent_status).toBe("working");
+      expect(outcome.timed_out).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not wake on working when no block was reported", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "working", state_change_seq: 7 },
+      };
+      const outcome = await waitChild("w1Z:p1", client, 300, { seq: 6, status: "working" });
+      expect(outcome.timed_out).toBe(true);
+      // `working` is only in the match set as a resume signal.
       const wait = client.calls.find((c: Call) => c.method === "events.wait")!;
-      expect(wait.args.statuses).not.toContain("blocked");
+      expect(wait.args.statuses).not.toContain("working");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("asks the stream for working too once a block was reported", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      client.opts.snapshots = {
+        "w1Z:p1": { ...baseSnapshot(), agent_status: "blocked", state_change_seq: 6 },
+      };
+      await waitChild("w1Z:p1", client, 300, { seq: 6, status: "blocked" });
+      const wait = client.calls.find((c: Call) => c.method === "events.wait")!;
+      expect(wait.args.statuses).toContain("working");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports gone when the pane no longer resolves, after confirming it", async () => {
+    const server = new StubHerdrServer();
+    await server.start();
+    try {
+      const client = new FakeHerdrClient({ socketPath: server.socketPath });
+      // No snapshot for the pane: agentGet answers null (closed, crashed).
+      const snap = (await waitChild("w1Z:p1", client, 300, { seq: 6 })).snapshot;
+      expect(snap.agent_status).toBe("unknown");
+      // Confirmed with a second probe before calling it gone — a transient
+      // detection gap must not read as a dead child.
+      expect(client.calls.filter((c: Call) => c.method === "agent.get")).toHaveLength(2);
+      expect(client.calls.find((c: Call) => c.method === "events.wait")).toBeUndefined();
     } finally {
       await server.close();
     }
@@ -102,7 +233,7 @@ describe("wait", () => {
         { paneId: "w1Z:p1", status: "done", seq: 5 } as ScriptedEvent,
         { paneId: "w1Z:p1", status: "done", seq: 6 } as ScriptedEvent,
       ]);
-      const snap = await waitChild("w1Z:p1", client, 2000);
+      const snap = (await waitChild("w1Z:p1", client, 2000)).snapshot;
       // Resolved on the NEW done, not the stale seq-5 replay.
       expect(snap.state_change_seq).toBe(6);
       // waitChild passed the captured pre-wait seq as fromSeq so the stale
@@ -127,11 +258,11 @@ describe("wait", () => {
       server.script([
         { paneId: "w1Z:p1", status: "done", seq: 5 } as ScriptedEvent,
       ]);
-      // A short timeout: waitChild must skip the stale done and time out,
-      // NOT return it instantly.
-      await expect(waitChild("w1Z:p1", client, 300)).rejects.toMatchObject({
-        code: "wait_timeout",
-      });
+      // A short budget: waitChild must skip the stale done and report
+      // `timed_out` — never return the stale state as an answer, and never
+      // throw (the wake channel always ends with a report).
+      const outcome = await waitChild("w1Z:p1", client, 300);
+      expect(outcome.timed_out).toBe(true);
     } finally {
       await server.close();
     }

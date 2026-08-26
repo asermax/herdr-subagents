@@ -149,6 +149,37 @@ describe("helper watch (subscriptions)", () => {
     expect(statuses()).toEqual(["working", "done"]);
   });
 
+  it("emits a repeat of the same status when the sequence advanced", async () => {
+    // Two finished turns in a row both read `done`. Dropping the second would
+    // lose that wake, so dedupe is on (status, sequence) — and the sequence
+    // comes from the probe, since status events carry none.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "done", 5);
+    startWatch();
+    await flush();
+
+    server.setCurrentStatus("w1Z:p1", "done", 6);
+    server.stream([{ paneId: "w1Z:p1", status: "done" }]);
+    await flush();
+
+    expect(statuses()).toEqual(["done", "done"]);
+  });
+
+  it("re-probes live children so a subscription that goes quiet cannot swallow a wake", async () => {
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "working", 5);
+    startWatch({ safetyReconcileMs: 40 });
+    await flush();
+    expect(statuses()).toEqual(["working"]);
+
+    // The child finishes but NO event is delivered — the socket is open and
+    // silent. The safety pass is the floor that still reports it.
+    server.setCurrentStatus("w1Z:p1", "done", 6);
+    await flush(140);
+
+    expect(statuses()).toEqual(["working", "done"]);
+  });
+
   it("does not re-emit an unchanged status", async () => {
     seedRegistry([entry("w1Z:p1", "cleaner")]);
     server.setCurrentStatus("w1Z:p1", "working");
@@ -408,12 +439,67 @@ describe("parent-role status line", () => {
     expect(sendWake).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT wake on a non-terminal status (working/blocked/idle)", () => {
+  it("does NOT wake while the child is working", () => {
+    const { state, sink, sendWake } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+    expect(sendWake).not.toHaveBeenCalled();
+  });
+
+  it("wakes on blocked, pointing at the pane and at the human", () => {
     const { state, sink, sendWake } = setup();
     processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
     processLine(state, sink, sendWake, line("w1Z:p1", "blocked", "cleaner"));
+
+    expect(sendWake).toHaveBeenCalledTimes(1);
+    expect(sendWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringMatching(/read w1Z:p1.*human/s),
+      }),
+      { triggerTurn: true },
+    );
+    // Still in the fleet: a blocked child is alive and answerable.
+    expect(state.children.has("w1Z:p1")).toBe(true);
+  });
+
+  it("wakes when a blocked child resumes (blocked -> working)", () => {
+    // The parent asked the human to answer the dialog; this is how it learns
+    // they did.
+    const { state, sink, sendWake } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "blocked", "cleaner"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+
+    expect(sendWake).toHaveBeenCalledTimes(2);
+    expect(sendWake).toHaveBeenLastCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("no longer blocked") }),
+      { triggerTurn: true },
+    );
+  });
+
+  it("does NOT wake on working that is not a resume", () => {
+    const { state, sink, sendWake } = setup();
     processLine(state, sink, sendWake, line("w1Z:p1", "idle", "cleaner"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
     expect(sendWake).not.toHaveBeenCalled();
+  });
+
+  it("wakes when a seen child's turn ends as idle (working -> idle)", () => {
+    // `idle` and `done` are herdr's same underlying state; a child whose tab
+    // has been seen finishes as `idle`, and that end-of-turn must still wake.
+    const { state, sink, sendWake } = setup();
+    processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
+    processLine(state, sink, sendWake, line("w1Z:p1", "idle", "cleaner"));
+    expect(sendWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT wake on an idle that is not a finished turn", () => {
+    const { state, sink, sendWake } = setup();
+    // A fresh child settling into idle, and an acknowledged done decaying to
+    // idle, are both states the parent has already been told about.
+    processLine(state, sink, sendWake, line("w1Z:p1", "idle", "cleaner"));
+    processLine(state, sink, sendWake, line("w1Z:p2", "done", "reviewer"));
+    processLine(state, sink, sendWake, line("w1Z:p2", "idle", "reviewer"));
+    // Only the `done` woke.
+    expect(sendWake).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a malformed line and leaves the line untouched", () => {

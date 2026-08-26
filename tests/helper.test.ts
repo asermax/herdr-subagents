@@ -259,6 +259,56 @@ describe("spawn readiness classification", () => {
     expect(fastFail.message).toContain("claude exited");
   });
 
+  it("waits out a startup block and completes the spawn when it clears", async () => {
+    // herdr answers agent_not_ready while a child sits on a startup dialog.
+    // The child is alive; a dialog that clears on its own must not fail the
+    // spawn.
+    const client = new FakeHerdrClient({
+      socketPath: server.socketPath,
+      snapshots: { "w1Z:p1": makeSnapshot({ agent_status: "blocked", state_change_seq: 1 }) },
+      startResult: {
+        doer: { error: { code: "agent_not_ready", message: "agent doer is blocked during startup" } },
+      },
+    });
+    server.script([{ paneId: "w1Z:p1", status: "idle", seq: 7 }]);
+
+    const result = await spawnChild(defaultSpawnInput(), {
+      client,
+      bounds: { startupBlockedMs: 500 },
+    });
+
+    expect(result.pane_id).toBe("w1Z:p1");
+    expect(client.calls.filter((c) => c.method === "tab.close")).toHaveLength(0);
+  });
+
+  it("keeps the tab, the registry entry, and the screen when a startup block does not clear", async () => {
+    const client = new FakeHerdrClient({
+      socketPath: server.socketPath,
+      snapshots: { "w1Z:p1": makeSnapshot({ agent_status: "blocked", state_change_seq: 1 }) },
+      screens: { "w1Z:p1": "Do you trust the files in this folder?\n❯ 1. Yes\n  2. No" },
+      startResult: {
+        doer: { error: { code: "agent_not_ready", message: "agent doer is blocked during startup" } },
+      },
+    });
+    const registry = makeRegistry(client);
+
+    const failure = await expectFail(
+      spawnChild(defaultSpawnInput(), {
+        client,
+        tracking: registry,
+        bounds: { startupBlockedMs: 100 },
+      }),
+    );
+
+    expect(failure.reason).toBe("blocked");
+    expect(failure.pane_id).toBe("w1Z:p1");
+    expect(failure.tab_id).toBe("w1Z:t1");
+    expect(failure.screen).toMatch(/Do you trust the files in this folder\?/);
+    // The child is alive and answerable: never closed, never untracked.
+    expect(client.calls.filter((c) => c.method === "tab.close")).toHaveLength(0);
+    expect((await registry.list()).map((c) => c.pane_id)).toEqual(["w1Z:p1"]);
+  });
+
   it("closes the half-created tab on a readiness failure", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
     client.opts.startResult = {

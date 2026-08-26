@@ -10,8 +10,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 //   - spawns `helper watch` once per session
 //   - summarizes every tracked child as ONE status line rendered as a widget
 //     above the input (ctx.ui.setWidget), recomputed on each change
-//   - on a terminal state (done|gone) forwards a compact wake (pi.sendMessage
-//     with triggerTurn); blocked NEVER wakes
+//   - on a state the parent must act on — a finished turn (done, or idle right
+//     after working), a dialog the child is stuck on (blocked), the resume from
+//     one (working right after blocked), or a lost child (gone) — forwards a
+//     compact wake (pi.sendMessage with triggerTurn)
 //
 // The extension holds NO herdr socket client and does NO extraction — it is a
 // thin bridge, and all herdr knowledge stays single-sourced in the helper.
@@ -23,8 +25,24 @@ export const STATUS_KEY = "herdr-subagents";
 export const WAKE_TYPE = "herdr-subagents:wake";
 
 // `unknown` reads as `gone`: detection lost (CONTEXT.md / collect normalize).
-// Terminal states wake; blocked never does.
-const TERMINAL = new Set(["done", "gone"]);
+// A finished turn and a lost child both wake. So does `blocked`: the child is
+// stuck on a dialog and the parent is the only one watching that tab (ADR-0007).
+const WAKES = new Set(["done", "gone", "blocked"]);
+
+// Two wakes are defined by the transition rather than the status alone
+// (ADR-0008), because `prev` is all this bridge has — the sequence lives in the
+// helper:
+//   - `idle` and `done` are herdr's SAME underlying state, `done` being the
+//     unseen variant. A child whose tab has been seen finishes its turn as
+//     `idle`, so an idle that FOLLOWS `working` is a finished turn; an idle that
+//     follows anything else (a fresh child settling, an acknowledged `done`) is
+//     not.
+//   - `working` that FOLLOWS `blocked` is the child resuming — the parent asked
+//     the human to answer a dialog and needs to know they did.
+const TRANSITION_WAKES: Array<{ from: string; to: string }> = [
+  { from: "working", to: "idle" },
+  { from: "blocked", to: "working" },
+];
 
 // Statuses that drop a child from the live widget. `gone` (detection lost)
 // and `closed` (the parent ran `helper close`) both shrink the summary; only
@@ -136,7 +154,10 @@ export function processLine(
 
   sink?.setWidget(STATUS_KEY, renderStatusLine(state.children));
 
-  if (!TERMINAL.has(status)) return;
+  const transitionWakes = TRANSITION_WAKES.some(
+    (t) => t.to === status && prev?.status === t.from,
+  );
+  if (!WAKES.has(status) && !transitionWakes) return;
 
   // The wake — terminal state only, compact, no payload. triggerTurn wakes an
   // idle parent; mid-turn it queues and lands at the turn boundary.
@@ -148,9 +169,15 @@ export function processLine(
 }
 
 // The wake carries no payload: a one-line nudge naming the child and state, so
-// the parent knows to collect. The result is NOT here.
+// the parent knows what to do next. The result is NOT here.
 function wakeContent(rec: ChildStatus): string {
   const name = rec.label ? `"${rec.label}"` : rec.pane_id;
+  if (rec.status === "blocked") {
+    return `Child ${name} is blocked on a dialog. Run \`helper read ${rec.pane_id}\` to see what it is asking, then tell the human to answer it in that tab.`;
+  }
+  if (rec.status === "working") {
+    return `Child ${name} is no longer blocked and is working again.`;
+  }
   return `Child ${name} reached ${rec.status}. Run \`helper collect ${rec.pane_id}\` to read its result.`;
 }
 

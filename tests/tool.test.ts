@@ -60,6 +60,25 @@ describe("buildHelperArgs", () => {
     expect(buildHelperArgs("close", { tab_id: "t1" })).toEqual(["close", "t1"]);
   });
 
+  it("read: positional pane_id + optional --lines", () => {
+    expect(buildHelperArgs("read", { pane_id: "w1" })).toEqual(["read", "w1"]);
+    expect(buildHelperArgs("read", { pane_id: "w1", lines: 60 })).toEqual([
+      "read",
+      "w1",
+      "--lines",
+      "60",
+    ]);
+  });
+
+  it("unblock: positional pane_id + --keys", () => {
+    expect(buildHelperArgs("unblock", { pane_id: "w1", keys: "1 enter" })).toEqual([
+      "unblock",
+      "w1",
+      "--keys",
+      "1 enter",
+    ]);
+  });
+
   it("omits empty/undefined fields rather than emitting bare flags", () => {
     expect(buildHelperArgs("spawn", {})).toEqual(["spawn"]);
     expect(buildHelperArgs("prompt", {})).toEqual(["prompt"]);
@@ -167,6 +186,35 @@ describe("formatResult", () => {
       ],
     });
     expect(text).toBe("Fleet (2):\n  review\n  tests");
+  });
+
+  it("read: shows the status and the pane", () => {
+    const text = formatResult(
+      "read",
+      { pane_id: "w1", label: "review" },
+      { pane_id: "w1", status: "blocked", screen: "Do you want to proceed?" },
+    );
+    expect(text).toBe("Subagent review is blocked. Its pane:\nDo you want to proceed?");
+  });
+
+  it("unblock: reports the cleared status", () => {
+    const text = formatResult(
+      "unblock",
+      { pane_id: "w1", label: "review", keys: "enter" },
+      { pane_id: "w1", status: "working", cleared: true },
+    );
+    expect(text).toBe("Unblocked subagent review; it is now working");
+  });
+
+  it("unblock: reports a block the keys did not answer, with the pane", () => {
+    const text = formatResult(
+      "unblock",
+      { pane_id: "w1", label: "review", keys: "esc" },
+      { pane_id: "w1", status: "blocked", cleared: false, screen: "Do you want to proceed?" },
+    );
+    expect(text).toBe(
+      "Subagent review is still blocked after esc. Its pane:\nDo you want to proceed?",
+    );
   });
 
   it("close: uses the label", () => {
@@ -277,18 +325,35 @@ describe("subagentTool definition", () => {
   it("has prompt guidelines covering the workflow", () => {
     expect(subagentTool.promptGuidelines!.length).toBeGreaterThanOrEqual(5);
     const joined = subagentTool.promptGuidelines!.join("\n");
-    for (const cmd of ["spawn", "prompt", "collect", "close", "list"] as SubagentCommand[]) {
+    for (const cmd of [
+      "spawn",
+      "prompt",
+      "collect",
+      "close",
+      "list",
+      "read",
+      "unblock",
+    ] as SubagentCommand[]) {
       expect(joined).toContain(cmd);
     }
   });
 
-  it("exposes a command enum with all six commands", () => {
+  it("exposes a command enum with every command", () => {
     const props = subagentTool.parameters as unknown as {
       properties: { command: { anyOf: Array<{ const: string }> } };
     };
     const commands = props.properties.command.anyOf.map((c) => c.const);
     expect(commands).toEqual(
-      expect.arrayContaining(["spawn", "prompt", "wait", "collect", "list", "close"]),
+      expect.arrayContaining([
+        "spawn",
+        "prompt",
+        "wait",
+        "collect",
+        "list",
+        "close",
+        "read",
+        "unblock",
+      ]),
     );
   });
 });

@@ -15,7 +15,16 @@ import { helperPath } from "./parent-role.js";
 // and returns its JSON output. `watch` is excluded — the extension already
 // runs `helper watch` via parent-role.ts.
 
-const COMMANDS = ["spawn", "prompt", "wait", "collect", "list", "close"] as const;
+const COMMANDS = [
+  "spawn",
+  "prompt",
+  "wait",
+  "collect",
+  "list",
+  "close",
+  "read",
+  "unblock",
+] as const;
 export type SubagentCommand = (typeof COMMANDS)[number];
 
 /** Flat options shared across all commands; only the relevant subset is used per command. */
@@ -27,6 +36,8 @@ export interface SubagentOptions {
   tab_id?: string;
   body?: string;
   timeout?: number;
+  keys?: string;
+  lines?: number;
 }
 
 const subagentSchema = Type.Object({
@@ -37,6 +48,8 @@ const subagentSchema = Type.Object({
     Type.Literal("collect"),
     Type.Literal("list"),
     Type.Literal("close"),
+    Type.Literal("read"),
+    Type.Literal("unblock"),
   ]),
   options: Type.Object({
     kind: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("claude")])),
@@ -46,6 +59,10 @@ const subagentSchema = Type.Object({
     tab_id: Type.Optional(Type.String({ description: "Tab id" })),
     body: Type.Optional(Type.String({ description: "Prompt body (wrap in <supervisor-agent>)" })),
     timeout: Type.Optional(Type.Number({ description: "Timeout in ms (wait only)" })),
+    keys: Type.Optional(
+      Type.String({ description: 'Space-separated key names, e.g. "1 enter" (unblock only)' }),
+    ),
+    lines: Type.Optional(Type.Number({ description: "Screen lines to read (read only)" })),
   }),
 });
 
@@ -69,6 +86,8 @@ export interface SubagentToolDetails {
  * | collect  | `collect <pane_id>`                                     |
  * | list     | `list`                                                  |
  * | close    | `close <tab_id>`                                        |
+ * | read     | `read <pane_id> [--lines <n>]`                          |
+ * | unblock  | `unblock <pane_id> --keys <keys>`                       |
  */
 export function buildHelperArgs(command: SubagentCommand, options: SubagentOptions): string[] {
   switch (command) {
@@ -103,6 +122,18 @@ export function buildHelperArgs(command: SubagentCommand, options: SubagentOptio
       if (options.tab_id) args.push(options.tab_id);
       return args;
     }
+    case "read": {
+      const args = ["read"];
+      if (options.pane_id) args.push(options.pane_id);
+      if (options.lines !== undefined) args.push("--lines", String(options.lines));
+      return args;
+    }
+    case "unblock": {
+      const args = ["unblock"];
+      if (options.pane_id) args.push(options.pane_id);
+      if (options.keys) args.push("--keys", options.keys);
+      return args;
+    }
   }
 }
 
@@ -130,6 +161,17 @@ interface ListChildJson {
 
 interface ListResultJson {
   children: ListChildJson[];
+}
+
+interface ReadResultJson {
+  status: string;
+  screen: string;
+}
+
+interface UnblockResultJson {
+  status: string;
+  cleared: boolean;
+  screen?: string;
 }
 
 /** A short label for a child, preferring the human-readable name. */
@@ -203,6 +245,19 @@ export function formatResult(
       const name = childName(options.label);
       return `Closed subagent ${name}`;
     }
+    case "read": {
+      const r = json as ReadResultJson;
+      const name = childName(options.label);
+      return `Subagent ${name} is ${r.status}. Its pane:\n${r.screen}`;
+    }
+    case "unblock": {
+      const r = json as UnblockResultJson;
+      const name = childName(options.label);
+      if (r.cleared) return `Unblocked subagent ${name}; it is now ${r.status}`;
+      return `Subagent ${name} is still blocked after ${options.keys ?? "the keys"}. Its pane:\n${
+        r.screen ?? ""
+      }`;
+    }
   }
 }
 
@@ -237,6 +292,8 @@ function commandTarget(command: SubagentCommand, options: SubagentOptions): stri
     case "wait":
     case "collect":
     case "close":
+    case "read":
+    case "unblock":
       return `subagent ${childName(options.label)}`;
     case "list":
       return "";
@@ -323,7 +380,7 @@ export function runHelper(
 }
 
 const PROMPT_SNIPPET =
-  "Delegate work to a child agent tab (spawn, prompt, collect, close, list).";
+  "Delegate work to a child agent tab (spawn, prompt, collect, close, list, read, unblock).";
 
 const PROMPT_GUIDELINES: string[] = [
   "Use `subagent` to delegate separable work to a child agent running in its own herdr tab — one tab, one task.",
@@ -333,12 +390,14 @@ const PROMPT_GUIDELINES: string[] = [
   "`close`: options `{ tab_id: string }`. Close a child once you have its result and no longer need it.",
   "`list`: no options. Shows every tracked child and its status — the durable backstop for a missed wake.",
   "`wait`: options `{ pane_id: string, timeout?: number }`. Rarely needed — your session auto-wakes you when a child reaches a terminal state. The abort signal interrupts a stuck wait.",
+  "`read`: options `{ pane_id: string, lines?: number }`. Shows a child's pane — what a `blocked` child is waiting on. On a blocked child, read the pane and tell the human what to answer and in which tab; you are woken again when it resumes.",
+  "`unblock`: options `{ pane_id: string, keys: string }`. Sends key presses to answer the dialog a `blocked` child is stalled on, e.g. `keys: \"enter\"` or `keys: \"1 enter\"`. Use it ONLY when the human has explicitly told you to answer that dialog — never on your own judgement. Rejected unless the child really is blocked.",
   "Prefer breadth (several children at your level) over deep chains. Close children before spawning the next batch. Invoke `/skill:delegate` for the full protocol.",
 ];
 
 const DESCRIPTION = [
   "Delegate work to child agents via the herdr helper.",
-  "Pass `command` (spawn|prompt|wait|collect|list|close) and the relevant `options`.",
+  "Pass `command` (spawn|prompt|wait|collect|list|close|read|unblock) and the relevant `options`.",
   "Each command returns a descriptive summary of what happened.",
 ].join(" ");
 

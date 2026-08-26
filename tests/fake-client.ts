@@ -35,6 +35,8 @@ export interface FakeOptions {
   // The state_change_seq to report on agentGet at each call index, to model
   // delivery advancing the sequence.
   seqByGetIndex?: (paneId: string, callIndex: number) => number | undefined;
+  // Screen text returned by agentRead per pane. Absent panes read as empty.
+  screens?: Record<string, string>;
   // Per-get snapshot overrides keyed by pane: return a partial merged over the
   // base, or undefined to use the base as-is. Models transient states (e.g. a
   // freshly-started agent briefly reporting `unknown`).
@@ -112,6 +114,15 @@ export class FakeHerdrClient implements HerdrClient {
 
   async agentPrompt(target: string, body: string): Promise<void> {
     this.calls.push({ method: "agent.prompt", args: { target, body } });
+  }
+
+  async agentRead(target: string, opts: { lines: number }): Promise<string> {
+    this.calls.push({ method: "agent.read", args: { target, ...opts } });
+    return this.opts.screens?.[target] ?? "";
+  }
+
+  async agentSendKeys(target: string, keys: readonly string[]): Promise<void> {
+    this.calls.push({ method: "agent.send-keys", args: { target, keys: [...keys] } });
   }
 
   async waitForStatus(

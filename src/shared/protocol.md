@@ -38,7 +38,7 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 - `agent` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in the project's agent files, never a path.
 - The label is final; a child never renames its own tab.
 
-Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly.
+Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly. One failure is different: `blocked` means the child came up on a startup dialog and never became ready. It is alive, so its tab is kept and its pane comes back with the dialog on it — see **Blocked children**.
 
 ## Prompt
 
@@ -48,6 +48,20 @@ Delivery is verified: the interface watches for the child to act on the prompt a
 
 {{wake}}
 
+## Blocked children
+
+`blocked` is herdr recognising a dialog on a child's screen — a tool approval, a question it opened instead of asking you, a startup trust prompt. It is neither terminal nor a failure: the child is alive and one keypress from carrying on. It is also the state most in need of you, because unlike a finished turn it will never resolve on its own.
+
+A blocked child wakes you. What you do with it:
+
+- `read` its pane to see what is being asked. This is the one screen read in the interface; it is for a blocked child, not for checking progress.
+- **Tell the human what it needs and which tab to answer it in** — name the tab label and the pane id. The answer is theirs to give, not yours: you cannot know whether a permission prompt should be granted, and a question the child asked is a question for a person.
+- You are woken again when the child resumes, so you can carry on without watching the tab.
+
+`unblock` sends key presses (`enter`, `esc`, `1 enter`) and reports whether the block cleared. Use it **only when the human has explicitly told you to answer that dialog** — "yes, accept it" is your authorization, and it saves them a tab switch. Never on your own judgement, and never as a way to keep a child moving. It refuses a child that is not blocked: keys sent to an idle child are typed into its prompt box and corrupt its next prompt.
+
+A child that asks through a dialog rather than `<subagent-ask>` has misrouted its question — surface it, and prompt it to use the tag next time. Whoever answers a dialog, the child cannot tell you from the human.
+
 ## Collect
 
 When a child finishes, you are woken to collect it.
@@ -56,7 +70,7 @@ Returns `{pane_id, label, agent, status, message?, error?}`. `status` reflects h
 
 The `<subagent-ask>…</subagent-ask>` tag in the child's final message marks a question for you rather than a result.
 
-`blocked` is non-terminal: a blocked child is still working or waiting, so leave it alone.
+`blocked` is non-terminal: the child is waiting, not finished. See **Blocked children**.
 
 Once you no longer need a child, you can close it.
 

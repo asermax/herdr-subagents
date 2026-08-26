@@ -8,5 +8,7 @@ Use the `subagent` tool for all delegation commands. Pass `command` and the rele
 | collect  | `{ pane_id }`                                     |
 | close    | `{ tab_id }`                                      |
 | list     | `{}`                                              |
+| read     | `{ pane_id, lines? }`                             |
+| unblock  | `{ pane_id, keys }`                               |
 
 `wait` is rarely needed — your session auto-wakes you when a child finishes.

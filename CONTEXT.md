@@ -95,14 +95,28 @@ The human-readable title of a tab, set by the parent at creation and final. For 
 _Avoid_: treating the label as an identifier.
 
 **agent status**:
-herdr's state for a pane's agent: `idle | working | blocked | done | unknown`. Push, not polled — streamed via `pane.agent_status_changed`.
+herdr's state for a pane's agent: `idle | working | blocked | done | unknown`. Push, not polled — streamed via `pane.agent_status_changed`. The event carries the status but NOT `state_change_seq`; only `agent.get` reports the sequence, so anything reasoning about which state is new probes for it.
 
 **done**:
 A herdr agent status meaning the agent finished a turn, unacknowledged. Derived by herdr from a non-idle → idle transition. Reflects herdr state, not task success: a child that gives up still reaches `done`.
 _Avoid_: reading `done` as "the work succeeded".
 
+**idle**:
+A herdr agent status meaning the agent is ready for input. `done` and `idle` are the SAME underlying state: `done` is the unacknowledged variant, `idle` the one whose tab has been seen in the focused herdr UI. So a finished turn presents as either, depending on whether anyone looked — a wake must treat both as the end of a turn.
+_Avoid_: reading `idle` as "never worked" — after a prompt it means the turn ended.
+
+**acked seq**:
+The last `state_change_seq` the parent has been told about for a child, held in the registry with the status at that sequence. `prompt` acks the delivery receipt, `collect` acks the state it read, and `wait` acks what it reported; `wait` uses it as its baseline, so a state that arrives before the wait is armed still counts as new. The acked status matters in one case: a parent last told `blocked` is also woken when the child resumes. See ADR-0008.
+
+**wake**:
+What brings the parent back to a child: a finished turn (`done`, or an `idle` that ends one), a `blocked` dialog, the resume from one, or a lost child (`gone`). On claude it is a `wait` the parent arms per prompt; on pi the extension forwards it from `watch`. Never lost to a missed event — the state reported is probed, not inferred from the stream.
+
 **blocked**:
-A herdr agent status meaning the agent is stalled, often a tool-approval prompt waiting on the human. Non-terminal and benign; the parent leaves a blocked child alone.
+A herdr agent status meaning herdr recognised a dialog on the agent's screen — a tool approval, a startup trust prompt. Non-terminal and benign: the child is alive and answerable. The parent can `read` the pane and `unblock` it with key presses, or hand it to the human; it never closes a blocked child.
+_Avoid_: reading `blocked` as a dead or broken child.
+
+**startup block**:
+A child blocked before it ever became interactive — herdr answers `agent_start` with `agent_not_ready` and keeps the pane and the agent name. spawn reports it as a `blocked` failure and keeps the tab, unlike every other spawn failure. See ADR-0007.
 
 **session log**:
 The agent's own structured transcript, recorded by herdr as `agent_session` (a `.jsonl` path on pi, a session uuid on claude). The reliable content source for collect; screen reads are not.

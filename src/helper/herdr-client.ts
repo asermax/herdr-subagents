@@ -18,6 +18,12 @@ import {
 // implement `from_seq` filtering on `events.wait` (only the test stub used
 // to), so seq filtering must happen here. Streaming lets the wait drain past
 // stale replays and resolve on the first genuinely new match.
+//
+// Verified against herdr 0.8.x: a status event carries only
+// `{ pane_id, workspace_id, agent, agent_status }` — no `state_change_seq` —
+// and subscribing replays no status history. So the stale filter is inert in
+// production and the sequence a caller reasons about comes from `agent.get`
+// (see waitChild's probe and the prompt receipt).
 
 const HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
 
@@ -177,6 +183,30 @@ export class RealHerdrClient implements HerdrClient {
 
   async agentPrompt(target: string, body: string): Promise<void> {
     await herdr<{ type: string }>("agent", "prompt", target, body);
+  }
+
+  // `agent read` prints the terminal snapshot as plain text, not a JSON-RPC
+  // envelope, so it bypasses herdr() and reads stdout directly. `detection` is
+  // the region herdr classified the pane on — the dialog it saw, without the
+  // scrollback around it.
+  async agentRead(target: string, opts: { lines: number }): Promise<string> {
+    const { stdout, stderr, code } = await runCli([
+      "agent",
+      "read",
+      target,
+      "--source",
+      "detection",
+      "--lines",
+      String(opts.lines),
+    ]);
+    if (code !== 0) {
+      throw new HerdrError("agent_read_failed", stderr.trim().split("\n")[0] || `exit ${code}`, stderr);
+    }
+    return stdout;
+  }
+
+  async agentSendKeys(target: string, keys: readonly string[]): Promise<void> {
+    await herdr<{ type: string }>("agent", "send-keys", target, ...keys);
   }
 
   async waitForStatus(

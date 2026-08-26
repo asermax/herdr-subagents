@@ -8,7 +8,9 @@ import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
 import { DEFAULT_PROMPT_BOUNDS, deliverPrompt } from "./prompt.js";
 import { fileRegistryStore, Registry } from "./registry.js";
+import { DEFAULT_SCREEN_LINES, readScreen } from "./screen.js";
 import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
+import { isUnblockRefusal, unblockChild } from "./unblock.js";
 import { runWatch } from "./watch.js";
 
 const KINDS = ["pi", "claude"] as const;
@@ -24,8 +26,19 @@ function isKind(v: string): v is Kind {
 // of our own surface, so future flags forward by default.
 const SPAWN_OWN_FLAGS = new Set(["kind", "agent", "label", "cwd", "workspace"]);
 
-const SUBCOMMANDS = new Set(["spawn", "prompt", "wait", "collect", "list", "close", "watch"]);
-const USAGE = "usage: helper <spawn|prompt|wait|collect|list|close|watch> [options]";
+const SUBCOMMANDS = new Set([
+  "spawn",
+  "prompt",
+  "wait",
+  "collect",
+  "list",
+  "close",
+  "read",
+  "unblock",
+  "watch",
+]);
+const USAGE =
+  "usage: helper <spawn|prompt|wait|collect|list|close|read|unblock|watch> [options]";
 
 /**
  * Extract the argv slice to forward to a spawned child: every `--flag value`
@@ -63,6 +76,13 @@ export function passthroughArgs(rawArgs: string[]): string[] {
 
 function emit(obj: unknown): void {
   process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+// JSON.stringify drops `Error.message` (it is not an enumerable property), so
+// a thrown HerdrError would emit a payload with a code and no message.
+function emitError(e: unknown): void {
+  if (e instanceof HerdrError) emit({ code: e.code, message: e.message });
+  else emit(e);
 }
 
 function fail(message: string, code = 1): never {
@@ -127,12 +147,13 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
     );
     emit(result);
   } catch (e) {
-    emit(e);
-    fail(
-      isSpawnFailure(e)
-        ? `spawn failed: ${e.message}`
-        : `spawn failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    emitError(e);
+    // A `blocked` failure leaves a live child behind; saying "spawn failed"
+    // would read as a dead one.
+    if (isSpawnFailure(e)) {
+      fail(`spawn ${e.reason === "blocked" ? "blocked" : "failed"}: ${e.message}`);
+    }
+    fail(`spawn failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -146,13 +167,22 @@ async function runPrompt(args: PromptArgs): Promise<void> {
   if (!paneId) fail("usage: helper prompt <pane_id> --body <text>", 2);
   const body = args.body;
   if (body === undefined) fail("--body is required", 2);
-  const { client } = buildDeps();
+  const { client, registry } = buildDeps();
   // The body arrives already wrapped in <supervisor-agent> by the caller.
   try {
-    await deliverPrompt(client, paneId, body, DEFAULT_PROMPT_BOUNDS);
-    emit({ pane_id: paneId, sent: true });
+    const receipt = await deliverPrompt(client, paneId, body, DEFAULT_PROMPT_BOUNDS);
+    // Ack the delivery so a `wait` armed after it knows which transitions are
+    // new — including one armed after the turn already ended (ADR-0008). Only a
+    // `working` receipt is acked as itself; the other cases ack the pre-send
+    // state, which the parent has already acted on.
+    await registry.setAcked(
+      paneId,
+      receipt.acked_seq,
+      receipt.status === "working" ? "working" : undefined,
+    );
+    emit({ pane_id: paneId, sent: true, status: receipt.status });
   } catch (e) {
-    emit(e);
+    emitError(e);
     fail(
       isSpawnFailure(e)
         ? `prompt failed: ${e.message}`
@@ -169,11 +199,38 @@ interface WaitArgs {
 async function runWait(args: WaitArgs): Promise<void> {
   const paneId = args.paneId;
   if (!paneId) fail("usage: helper wait <pane_id>", 2);
-  const { client } = buildDeps();
+  const { client, registry } = buildDeps();
   const timeout = args.timeout ? Number(args.timeout) : 0;
-  // wait returns on terminal state (done|gone), NOT on blocked.
-  const snap = await waitChild(paneId, client, timeout);
-  emit({ pane_id: paneId, status: snap.agent_status });
+  // The baseline is what `prompt`/`collect`/`wait` acked; an untracked pane has
+  // none and falls back to the state read at arm time.
+  const entry = await registry.get(paneId);
+  // wait returns on anything the parent must act on: a finished turn, a dialog
+  // the child is stalled on, a resume from one, or a lost child.
+  const outcome = await waitChild(paneId, client, timeout, {
+    seq: entry?.acked_seq,
+    status: entry?.acked_status,
+  });
+  const snap = outcome.snapshot;
+  // The wait IS the notification, so ack what it reports: a wait the parent
+  // re-arms watches for the next thing, not this one again. A timed-out wait
+  // reported nothing new, so it acks nothing.
+  if (!outcome.timed_out && snap.state_change_seq !== undefined) {
+    await registry.setAcked(paneId, snap.state_change_seq, snap.agent_status);
+  }
+  emit({
+    pane_id: paneId,
+    status: normalizeWaitStatus(snap.agent_status),
+    // The budget ran out with nothing new — re-arm rather than read this as an
+    // answer. Never an error exit: a wake channel that dies silently is the bug
+    // this whole path exists to avoid.
+    ...(outcome.timed_out ? { timed_out: true } : {}),
+  });
+}
+
+// `unknown` means detection was lost; downstream reads that as `gone` and the
+// wait's caller should too.
+function normalizeWaitStatus(status: string): string {
+  return status === "unknown" ? "gone" : status;
 }
 
 interface CollectArgs {
@@ -186,6 +243,52 @@ async function runCollect(args: CollectArgs): Promise<void> {
   const { client, registry } = buildDeps();
   const deps: CollectDeps = { client, registry };
   emit(await collectChild(paneId, deps));
+}
+
+interface ReadArgs {
+  paneId: string | undefined;
+  lines: string | undefined;
+}
+
+async function runRead(args: ReadArgs): Promise<void> {
+  const paneId = args.paneId;
+  if (!paneId) fail("usage: helper read <pane_id> [--lines <n>]", 2);
+  const { client } = buildDeps();
+  const snap = await client.agentGet(paneId);
+  if (snap === null) fail(`pane ${paneId} does not resolve as an agent`);
+  const screen = await readScreen(
+    client,
+    paneId,
+    args.lines ? Number(args.lines) : DEFAULT_SCREEN_LINES,
+  );
+  emit({ pane_id: paneId, status: snap.agent_status, screen: screen ?? "" });
+}
+
+interface UnblockArgs {
+  paneId: string | undefined;
+  keys: string | undefined;
+}
+
+async function runUnblock(args: UnblockArgs): Promise<void> {
+  const paneId = args.paneId;
+  if (!paneId) fail('usage: helper unblock <pane_id> --keys "<key> [key ...]"', 2);
+  // Key names only (`enter`, `esc`, `1`, `ctrl+c`). herdr is the authority on
+  // the set: it rejects an unsupported name with `invalid_key` and sends
+  // nothing, so there is no key list to duplicate and drift here.
+  const keys = (args.keys ?? "").trim().split(/\s+/).filter((k) => k !== "");
+  if (keys.length === 0) fail("--keys is required (space-separated herdr key names)", 2);
+
+  const { client } = buildDeps();
+  try {
+    emit(await unblockChild(client, paneId, keys));
+  } catch (e) {
+    emitError(e);
+    fail(
+      isUnblockRefusal(e)
+        ? `unblock refused: ${e.message}`
+        : `unblock failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 }
 
 async function runList(): Promise<void> {
@@ -265,13 +368,29 @@ const close = defineCommand({
   run: ({ args }) => runCatching(runClose(args)),
 });
 
+const read = defineCommand({
+  args: {
+    paneId: { type: "positional", required: false, description: "Pane id" },
+    lines: { type: "string", description: "Screen lines to read" },
+  },
+  run: ({ args }) => runCatching(runRead(args)),
+});
+
+const unblock = defineCommand({
+  args: {
+    paneId: { type: "positional", required: false, description: "Pane id" },
+    keys: { type: "string", description: 'Space-separated herdr key names (e.g. "1 enter")' },
+  },
+  run: ({ args }) => runCatching(runUnblock(args)),
+});
+
 const watch = defineCommand({
   args: {},
   run: () => runCatching(runWatch()),
 });
 
 const main = defineCommand({
-  subCommands: { spawn, prompt, wait, collect, list, close, watch },
+  subCommands: { spawn, prompt, wait, collect, list, close, read, unblock, watch },
 });
 
 // Run only when invoked as the entrypoint — importing the module (for unit

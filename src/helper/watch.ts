@@ -72,8 +72,11 @@ interface PaneSub {
   buffer: string;
   live: boolean;
   dead: boolean;
-  // Last status emitted (dedupe so a stable status is not re-sent).
+  // Last status emitted, with the sequence it was emitted at. Dedupe is on the
+  // PAIR: two consecutive `done`s are two finished turns, and dropping the
+  // second would lose a wake (ADR-0008).
   lastStatus: string | null;
+  lastSeq: number | null;
   // True once a real (non-`unknown`) status was observed. `unknown` before
   // this point is a still-booting agent, not a loss, and is suppressed.
   seenReal: boolean;
@@ -156,6 +159,7 @@ class WatchEngine {
         live: false,
         dead: false,
         lastStatus: null,
+        lastSeq: null,
         seenReal: false,
       };
     sub.label = child.label;
@@ -202,10 +206,10 @@ class WatchEngine {
     // deliver changes only; this seeds the live status on subscribe. A gone /
     // not-yet-detected pane answers agent_not_found (null) → nothing; a booting
     // agent answers `unknown`, which emit() suppresses until a real status lands.
-    void probeAgent(this.socketPath, child.pane_id).then((status) => {
-      if (status && !sub.dead && !this.stopped) {
+    void probeAgent(this.socketPath, child.pane_id).then((probed) => {
+      if (probed && !sub.dead && !this.stopped) {
         sub.live = true;
-        this.emit(child.pane_id, sub, status);
+        this.emit(child.pane_id, sub, probed.status, probed.seq);
       }
     });
   }
@@ -214,7 +218,7 @@ class WatchEngine {
     let env: {
       result?: { type?: string };
       event?: string;
-      data?: { agent_status?: string };
+      data?: { agent_status?: string; state_change_seq?: number };
       error?: { code?: string };
     };
     try {
@@ -230,7 +234,14 @@ class WatchEngine {
       const status = env.data?.agent_status;
       if (typeof status === "string") {
         sub.live = true;
-        this.emit(paneId, sub, status);
+        // The event carries the status but no `state_change_seq`; a probe
+        // supplies it so a repeat of the same status is still recognised as a
+        // new turn. The event's status is what we report — it is the state the
+        // child really entered.
+        void probeAgent(this.socketPath, paneId).then((probed) => {
+          if (sub.dead || this.stopped) return;
+          this.emit(paneId, sub, status, probed?.seq ?? env.data?.state_change_seq);
+        });
       }
       return;
     }
@@ -248,12 +259,17 @@ class WatchEngine {
   // `gone` downstream and wake the parent for a child that is fine. Once a
   // real status landed, `unknown` is a genuine loss (agent dead, tab open) and
   // is emitted.
-  private emit(paneId: string, sub: PaneSub, status: string): void {
+  private emit(paneId: string, sub: PaneSub, status: string, seq?: number): void {
     const isUnknown = status === "unknown";
     if (isUnknown && !sub.seenReal) return;
-    if (sub.lastStatus === status) return;
+    // Dedupe on the (status, sequence) pair: the same status at the same
+    // sequence is the state already reported, but the same status at a NEW
+    // sequence is a new turn and must be emitted. With no sequence available,
+    // fall back to status-only dedupe.
+    if (sub.lastStatus === status && (seq === undefined || sub.lastSeq === seq)) return;
     if (!isUnknown) sub.seenReal = true;
     sub.lastStatus = status;
+    sub.lastSeq = seq ?? null;
     this.write(JSON.stringify({ pane_id: paneId, label: sub.label, status }));
   }
 
@@ -368,7 +384,23 @@ class WatchEngine {
     if (interval <= 0) return;
     this.safetyTimer = setInterval(() => {
       void this.reconcile();
+      void this.reprobeLive();
     }, interval);
+  }
+
+  // Re-read every live child's state and emit anything that differs from what
+  // was last emitted. A subscription can stop delivering without closing —
+  // nothing else would notice, and every wake after that point would be lost.
+  // Not a status poll: it emits only on a difference, and the event stream
+  // remains the fast path.
+  private async reprobeLive(): Promise<void> {
+    if (this.stopped) return;
+    for (const [paneId, sub] of this.subs) {
+      if (sub.dead || !sub.socket) continue;
+      const probed = await probeAgent(this.socketPath, paneId);
+      if (this.stopped || sub.dead || !probed) continue;
+      this.emit(paneId, sub, probed.status, probed.seq);
+    }
   }
 
   private async readRegistry(): Promise<Record<string, RegistryChild>> {
@@ -381,16 +413,21 @@ class WatchEngine {
   }
 }
 
-// One-shot agent.get on its own connection. Returns the current status, or null
-// if the pane is gone / has no detected agent.
-function probeAgent(socketPath: string, paneId: string): Promise<string | null> {
+// One-shot agent.get on its own connection. Returns the current status and
+// state sequence, or null if the pane is gone / has no detected agent.
+interface ProbedAgent {
+  status: string;
+  seq?: number;
+}
+
+function probeAgent(socketPath: string, paneId: string): Promise<ProbedAgent | null> {
   return new Promise((resolve) => {
     const s = createConnection(socketPath, () => {
       s.write(JSON.stringify({ id: "probe", method: "agent.get", params: { target: paneId } }) + "\n");
     });
     let buf = "";
     let done = false;
-    const finish = (v: string | null) => {
+    const finish = (v: ProbedAgent | null) => {
       if (done) return;
       done = true;
       s.destroy();
@@ -402,9 +439,18 @@ function probeAgent(socketPath: string, paneId: string): Promise<string | null> 
       if (nl >= 0) {
         try {
           const env = JSON.parse(buf.slice(0, nl)) as {
-            result?: { agent?: { agent_status?: string } };
+            result?: { agent?: { agent_status?: string; state_change_seq?: number } };
           };
-          finish(env.result?.agent?.agent_status ?? null);
+          const agent = env.result?.agent;
+          if (!agent?.agent_status) {
+            finish(null);
+          } else {
+            finish(
+              agent.state_change_seq === undefined
+                ? { status: agent.agent_status }
+                : { status: agent.agent_status, seq: agent.state_change_seq },
+            );
+          }
         } catch {
           finish(null);
         }

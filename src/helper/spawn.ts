@@ -1,6 +1,7 @@
-import type { HerdrClient, ReadinessResult } from "./herdr-types.js";
+import type { AgentStatus, HerdrClient, ReadinessResult } from "./herdr-types.js";
 import { HerdrError } from "./herdr-types.js";
 import type { RegistryEntry } from "./registry.js";
+import { readScreen } from "./screen.js";
 
 // spawn is a verify-and-repair sequence. Success from `agent start` is NOT
 // evidence a child is spawned and addressable. One observed failure drives
@@ -68,12 +69,18 @@ export interface SpawnResult {
   tab_id: string;
 }
 
-// Tunable bounds. These are the helper's, not the model's. Exhausting any of
-// them means a broken child: close the half-created tab and surface the pane.
+// Tunable bounds. These are the helper's, not the model's. Exhausting one
+// means a broken child: close the half-created tab and surface the pane. The
+// startup-block bound is the exception — a child waiting on a dialog is not
+// broken, so it keeps its tab (ADR-0007).
 export interface SpawnBounds {
   // Bounds interactive readiness only. No harness takes longer than 10s to
   // come up; a timeout means not installed or failed to start.
   readinessTimeoutMs: number;
+  // How long to give a child blocked during startup to clear on its own. A
+  // transient boot screen clears in well under this; a real dialog never does
+  // (it wants a keypress), so this is the cost of telling the two apart.
+  startupBlockedMs: number;
   // verify-and-rename attempts (act on evidence; bounded).
   maxRenameAttempts: number;
   // prompt-delivery verification attempts (bounded resends).
@@ -85,17 +92,21 @@ export interface SpawnBounds {
 
 export const DEFAULT_BOUNDS: SpawnBounds = {
   readinessTimeoutMs: 10_000,
+  startupBlockedMs: 5_000,
   maxRenameAttempts: 3,
   maxPromptAttempts: 3,
   deliveryStallMs: 5_000,
 };
 
 export interface SpawnFailure {
-  reason: "timeout" | "fast-fail" | "name" | "delivery" | "tab-create";
+  reason: "timeout" | "fast-fail" | "blocked" | "name" | "delivery" | "tab-create";
   message: string;
   // The half-created pane id, surfaced to the human if it cannot be cleaned up.
   pane_id?: string;
   tab_id?: string;
+  // What the child is waiting on, on a `blocked` failure. The pane is still
+  // open, so this is the parent's evidence for which keys answer the dialog.
+  screen?: string;
 }
 
 export interface SpawnDeps {
@@ -184,10 +195,31 @@ export async function spawnChild(
           `harness never became ready within ${bounds.readinessTimeoutMs}ms — not installed or failed to start`,
         );
       }
-      throw fail(
-        "fast-fail",
-        `harness started and exited: ${readiness.message}`,
-      );
+      // A child blocked during startup is running, detected, and named — it is
+      // sitting on a dialog (a trust prompt, an approval). Give it the startup
+      // window to clear on its own; if it does not, hand the live pane to the
+      // parent with the dialog on it. This failure is the one that does NOT
+      // close the tab: the child is not broken, it is waiting.
+      if (readiness.reason === "blocked") {
+        if (!(await clearsStartupBlock(client, paneId, bounds))) {
+          const screen = await readScreen(client, paneId);
+          const failure: SpawnFailure = {
+            reason: "blocked",
+            message: `child is blocked on a startup prompt and did not clear within ${
+              bounds.startupBlockedMs
+            }ms — the tab is kept: answer the prompt with unblock, or hand the pane to the human`,
+            pane_id: paneId,
+            tab_id: tabId,
+          };
+          if (screen !== undefined) failure.screen = screen;
+          throw failure;
+        }
+      } else {
+        throw fail(
+          "fast-fail",
+          `harness started and exited: ${readiness.message}`,
+        );
+      }
     }
 
     // 3. Verify the name landed; rename on evidence (bounded). This is the
@@ -199,6 +231,11 @@ export async function spawnChild(
 
     return { pane_id: paneId, tab_id: tabId };
   } catch (e) {
+    // A blocked child owns its tab: it is alive and answerable, so it survives
+    // the cleanup below and stays in the registry (the watch keeps streaming
+    // it, `list` keeps showing it).
+    if (isSpawnFailure(e) && e.reason === "blocked") throw e;
+
     // 4. On exhaustion of any bound, close the half-created tab and report.
     //    Never keep a broken child. Remove the registry entry BEFORE closing
     //    the tab: the event-driven watch reads the registry when the
@@ -251,12 +288,40 @@ async function startWithReadiness(
       if (e.code === "agent_start_timeout" || e.code === "timeout") {
         return { ok: false, reason: "timeout" };
       }
+      // `agent_not_ready` is herdr reporting a detected agent that is blocked
+      // during startup — it keeps the name and the pane. Treating it as a
+      // fast-fail would report a live child as exited and then kill it.
+      if (e.code === "agent_not_ready") {
+        return { ok: false, reason: "blocked", message: e.message };
+      }
       // Fast post-start failure: the harness started and exited, or the kind
-      // is not installed. Anything other than a timeout reads as fast-fail.
+      // is not installed. Anything else reads as fast-fail.
       return { ok: false, reason: "fast-fail", message: e.message };
     }
     return { ok: false, reason: "fast-fail", message: e instanceof Error ? e.message : String(e) };
   }
+}
+
+// Watch a startup-blocked pane for a move to any non-blocked state. Any wait
+// failure counts as "did not clear": the outcome is the same either way (the
+// tab is kept and the pane handed over), and a socket hiccup must never be the
+// reason a live child gets closed.
+async function clearsStartupBlock(
+  client: HerdrClient,
+  paneId: string,
+  bounds: SpawnBounds,
+): Promise<boolean> {
+  const before = await client.agentGet(paneId).catch(() => null);
+  if (before !== null && before.agent_status !== "blocked") return true;
+
+  const statuses: AgentStatus[] = ["idle", "working", "done"];
+  return client
+    .waitForStatus(paneId, statuses, {
+      timeoutMs: bounds.startupBlockedMs,
+      fromSeq: before?.state_change_seq ?? 0,
+    })
+    .then(() => true)
+    .catch(() => false);
 }
 
 // Step 3: verify the agent name landed; rename on evidence, bounded.

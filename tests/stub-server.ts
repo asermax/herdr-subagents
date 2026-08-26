@@ -59,6 +59,8 @@ export class StubHerdrServer {
   // explicitly; unset panes answer agent_not_found and so emit no probe line
   // (keeps the change-only tests unchanged).
   private currentStatuses: Record<string, string> = {};
+  // Per-pane state sequence answered by `agent.get`, when a test sets one.
+  private currentSeqs: Record<string, number> = {};
   // Panes explicitly marked gone: agent.get answers agent_not_found (the
   // stale-registry case that would make herdr reset a real connection).
   private stalePanes = new Set<string>();
@@ -81,9 +83,14 @@ export class StubHerdrServer {
     this.events = events;
   }
 
-  // Set the current status a `watch` probe (agent.get) reads for a pane.
-  setCurrentStatus(paneId: string, status: string): void {
+  // Set the current status a `watch` probe (agent.get) reads for a pane, and
+  // optionally the state sequence it reports with it — real herdr carries the
+  // sequence on `agent.get` but NOT on status events, which is what makes the
+  // probe the only place a repeat of the same status can be told apart.
+  setCurrentStatus(paneId: string, status: string, seq?: number): void {
     this.currentStatuses[paneId] = status;
+    if (seq === undefined) delete this.currentSeqs[paneId];
+    else this.currentSeqs[paneId] = seq;
   }
 
   // Mark a pane gone: agent.get answers agent_not_found for it (models a stale
@@ -348,8 +355,12 @@ export class StubHerdrServer {
       // Default to a live "idle" agent so registered children subscribe in
       // tests (real herdr returns agent_info for a spawned child).
       const status = this.currentStatuses[target] ?? "idle";
+      const seq = this.currentSeqs[target];
+      const agent = seq === undefined
+        ? { agent_status: status }
+        : { agent_status: status, state_change_seq: seq };
       socket.write(
-        JSON.stringify({ id: req.id, result: { type: "agent_info", agent: { agent_status: status } } }) + "\n",
+        JSON.stringify({ id: req.id, result: { type: "agent_info", agent } }) + "\n",
       );
       return;
     }
