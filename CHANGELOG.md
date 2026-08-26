@@ -1,3 +1,11 @@
+# [0.4.0](https://github.com/asermax/herdr-subagents/compare/v0.3.2...v0.4.0) (2026-08-26)
+
+
+### Features
+
+* **extension:** add `subagent` tool wrapping the helper on pi ([ee5ff01](https://github.com/asermax/herdr-subagents/commit/ee5ff019a02f3ca943fb0cb91a0c0e1163711818))
+* **helper:** never miss a child's wake, and hand blocked children to the human ([22b6111](https://github.com/asermax/herdr-subagents/commit/22b611101c7a77f7cbb08d87c3790188b132e315))
+
 # [0.4.0](https://github.com/asermax/herdr-subagents/compare/v0.3.2...v0.4.0) (2026-08-06)
 
 
