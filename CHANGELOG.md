@@ -1,3 +1,15 @@
+# [0.6.0](https://github.com/asermax/herdr-subagents/compare/v0.5.0...v0.6.0) (2026-08-31)
+
+
+### Bug Fixes
+
+* **helper:** reject --branch without --worktree before reaching for herdr ([54c061e](https://github.com/asermax/herdr-subagents/commit/54c061ec256d85f9f77f4ceafcc2349415fb2ee0))
+
+
+### Features
+
+* **helper:** give a child its own git worktree, and let the last one out take it ([ba0557b](https://github.com/asermax/herdr-subagents/commit/ba0557b43403dcc96e57078444b1cb6ba6201091))
+
 # [0.5.0](https://github.com/asermax/herdr-subagents/compare/v0.4.0...v0.5.0) (2026-08-26)
 
 
