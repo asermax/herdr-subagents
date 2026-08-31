@@ -149,15 +149,15 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   const label = args.label;
   if (!label) fail("--label is required", 2);
 
-  const cwd = args.cwd;
-  const workspaceId = args.workspace ?? currentWorkspaceId();
-
   // --branch/--base only mean something with a worktree. Silently ignoring them
   // would put the child in the parent's checkout while the caller believes it
   // is isolated.
   if (!args.worktree && (args.branch !== undefined || args.base !== undefined)) {
     fail("--branch and --base require --worktree", 2);
   }
+
+  const cwd = args.cwd;
+  const workspaceId = args.workspace ?? currentWorkspaceId();
 
   const worktree = args.worktree
     ? {
