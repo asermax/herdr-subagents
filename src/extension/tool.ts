@@ -32,6 +32,9 @@ export interface SubagentOptions {
   kind?: string;
   agent?: string;
   label?: string;
+  worktree?: boolean;
+  branch?: string;
+  base?: string;
   pane_id?: string;
   tab_id?: string;
   body?: string;
@@ -55,6 +58,15 @@ const subagentSchema = Type.Object({
     kind: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("claude")])),
     agent: Type.Optional(Type.String({ description: "Agent name (not a path)" })),
     label: Type.Optional(Type.String({ description: "Tab label" })),
+    worktree: Type.Optional(
+      Type.Boolean({ description: "Give the child its own git worktree (spawn only)" }),
+    ),
+    branch: Type.Optional(
+      Type.String({ description: "Worktree branch; an existing one is joined (spawn only)" }),
+    ),
+    base: Type.Optional(
+      Type.String({ description: "Ref a new worktree branch forks from (spawn only)" }),
+    ),
     pane_id: Type.Optional(Type.String({ description: "Pane id" })),
     tab_id: Type.Optional(Type.String({ description: "Tab id" })),
     body: Type.Optional(Type.String({ description: "Prompt body (wrap in <supervisor-agent>)" })),
@@ -80,7 +92,7 @@ export interface SubagentToolDetails {
  *
  * | command  | argv                                                    |
  * | -------- | ------------------------------------------------------- |
- * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>]` |
+ * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--worktree [--branch <b>] [--base <r>]]` |
  * | prompt   | `prompt <pane_id> --body <body>`                        |
  * | wait     | `wait <pane_id> [--timeout <ms>]`                       |
  * | collect  | `collect <pane_id>`                                     |
@@ -96,6 +108,11 @@ export function buildHelperArgs(command: SubagentCommand, options: SubagentOptio
       if (options.kind) args.push("--kind", options.kind);
       if (options.agent) args.push("--agent", options.agent);
       if (options.label) args.push("--label", options.label);
+      if (options.worktree) {
+        args.push("--worktree");
+        if (options.branch) args.push("--branch", options.branch);
+        if (options.base) args.push("--base", options.base);
+      }
       return args;
     }
     case "prompt": {

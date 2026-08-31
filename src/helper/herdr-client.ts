@@ -8,6 +8,10 @@ import {
   type HerdrClient,
   type TabCreateParams,
   type TabCreateResult,
+  type WorkspaceInfo,
+  type WorktreeCreateParams,
+  type WorktreeInfo,
+  type WorktreeOpened,
 } from "./herdr-types.js";
 
 // The real herdr client. CLI calls go through `herdr`; the event surface uses
@@ -89,6 +93,51 @@ interface TabCreateResponse {
 
 interface AgentResponse {
   agent: RawAgent;
+}
+
+interface RawWorktree {
+  path: string;
+  branch?: string | null;
+  label: string;
+  is_linked_worktree: boolean;
+  open_workspace_id?: string | null;
+}
+
+interface WorktreeListResponse {
+  worktrees: RawWorktree[];
+}
+
+interface WorktreeOpenResponse {
+  workspace: { workspace_id: string };
+  tab: { tab_id: string };
+  worktree: RawWorktree;
+  // `worktree open` only. True when the workspace was already open, in which
+  // case `tab` is a pre-existing tab and must NOT be closed.
+  already_open?: boolean;
+}
+
+interface WorkspaceResponse {
+  workspace: { workspace_id: string; tab_count: number };
+}
+
+function toWorktree(raw: RawWorktree): WorktreeInfo {
+  const wt: WorktreeInfo = {
+    path: raw.path,
+    label: raw.label,
+    is_linked_worktree: raw.is_linked_worktree,
+  };
+  if (raw.branch) wt.branch = raw.branch;
+  if (raw.open_workspace_id) wt.open_workspace_id = raw.open_workspace_id;
+  return wt;
+}
+
+function toOpened(res: WorktreeOpenResponse): WorktreeOpened {
+  const opened: WorktreeOpened = {
+    workspace_id: res.workspace.workspace_id,
+    path: res.worktree.path,
+  };
+  if (!res.already_open) opened.root_tab_id = res.tab.tab_id;
+  return opened;
 }
 
 interface RawAgent {
@@ -207,6 +256,44 @@ export class RealHerdrClient implements HerdrClient {
 
   async agentSendKeys(target: string, keys: readonly string[]): Promise<void> {
     await herdr<{ type: string }>("agent", "send-keys", target, ...keys);
+  }
+
+  async worktreeList(opts: { workspaceId?: string; cwd?: string }): Promise<WorktreeInfo[]> {
+    const args = ["worktree", "list"];
+    if (opts.workspaceId) args.push("--workspace", opts.workspaceId);
+    if (opts.cwd) args.push("--cwd", opts.cwd);
+    const res = await herdr<WorktreeListResponse>(...args);
+    return res.worktrees.map(toWorktree);
+  }
+
+  async worktreeCreate(params: WorktreeCreateParams): Promise<WorktreeOpened> {
+    const args = ["worktree", "create", "--no-focus"];
+    if (params.workspaceId) args.push("--workspace", params.workspaceId);
+    if (params.cwd) args.push("--cwd", params.cwd);
+    if (params.branch) args.push("--branch", params.branch);
+    if (params.base) args.push("--base", params.base);
+    if (params.label) args.push("--label", params.label);
+    return toOpened(await herdr<WorktreeOpenResponse>(...args));
+  }
+
+  async worktreeOpen(params: { path: string; label?: string }): Promise<WorktreeOpened> {
+    const args = ["worktree", "open", "--no-focus", "--path", params.path];
+    if (params.label) args.push("--label", params.label);
+    return toOpened(await herdr<WorktreeOpenResponse>(...args));
+  }
+
+  async worktreeRemove(workspaceId: string): Promise<void> {
+    await herdr<{ type: string }>("worktree", "remove", "--workspace", workspaceId);
+  }
+
+  async workspaceGet(workspaceId: string): Promise<WorkspaceInfo | null> {
+    try {
+      const res = await herdr<WorkspaceResponse>("workspace", "get", workspaceId);
+      return { workspace_id: res.workspace.workspace_id, tab_count: res.workspace.tab_count };
+    } catch (e) {
+      if (e instanceof HerdrError && e.code === "workspace_not_found") return null;
+      throw e;
+    }
   }
 
   async waitForStatus(

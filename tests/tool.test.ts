@@ -29,6 +29,37 @@ describe("buildHelperArgs", () => {
     ).toEqual(["spawn", "--kind", "claude", "--agent", "reviewer", "--label", "code review"]);
   });
 
+  it("spawn: worktree flags ride along, and only with --worktree", () => {
+    expect(
+      buildHelperArgs("spawn", {
+        kind: "pi",
+        label: "fix",
+        worktree: true,
+        branch: "feat/login",
+        base: "origin/main",
+      }),
+    ).toEqual([
+      "spawn",
+      "--kind",
+      "pi",
+      "--label",
+      "fix",
+      "--worktree",
+      "--branch",
+      "feat/login",
+      "--base",
+      "origin/main",
+    ]);
+    // Without the flag, branch/base mean nothing and must not reach the helper.
+    expect(buildHelperArgs("spawn", { kind: "pi", label: "fix", branch: "feat/login" })).toEqual([
+      "spawn",
+      "--kind",
+      "pi",
+      "--label",
+      "fix",
+    ]);
+  });
+
   it("prompt: positional pane_id + --body", () => {
     expect(buildHelperArgs("prompt", { pane_id: "w1", body: "do thing" })).toEqual([
       "prompt",

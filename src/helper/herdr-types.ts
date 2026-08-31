@@ -32,6 +32,42 @@ export interface TabCreateParams {
   focus: boolean;
 }
 
+// A git worktree as herdr reports it. `open_workspace_id` is set when the
+// worktree already has a workspace open on it — that is the join target.
+export interface WorktreeInfo {
+  path: string;
+  branch?: string;
+  label: string;
+  is_linked_worktree: boolean;
+  open_workspace_id?: string;
+}
+
+// What `worktree create` / `worktree open` hand back. herdr opens a workspace
+// with its own first tab; `root_tab_id` is that tab, which the caller closes
+// once it has created the child's own tab. Absent when the workspace was
+// already open, where the tab belongs to whoever opened it.
+export interface WorktreeOpened {
+  workspace_id: string;
+  path: string;
+  root_tab_id?: string;
+}
+
+export interface WorktreeCreateParams {
+  // The source checkout the worktree forks from, as a workspace or a path.
+  workspaceId?: string;
+  cwd?: string;
+  branch?: string;
+  base?: string;
+  label?: string;
+}
+
+// The slice of a workspace `close` reads: `tab_count` decides whether the child
+// being closed is the last one in its worktree.
+export interface WorkspaceInfo {
+  workspace_id: string;
+  tab_count: number;
+}
+
 export interface AgentStartParams {
   name: string;
   kind: "pi" | "claude";
@@ -66,6 +102,16 @@ export interface HerdrClient {
     statuses: AgentStatus[],
     opts: { timeoutMs: number; fromSeq?: number },
   ): Promise<AgentSnapshot>;
+  // Git worktrees. herdr models a worktree as a workspace, so creating one
+  // yields a workspace to put the child's tab in and removing one disposes the
+  // workspace, its tabs, and the checkout together.
+  worktreeList(opts: { workspaceId?: string; cwd?: string }): Promise<WorktreeInfo[]>;
+  worktreeCreate(params: WorktreeCreateParams): Promise<WorktreeOpened>;
+  worktreeOpen(params: { path: string; label?: string }): Promise<WorktreeOpened>;
+  // Removes the checkout AND everything in its workspace. Never forced: a
+  // checkout with uncommitted changes refuses, which is the caller's signal.
+  worktreeRemove(workspaceId: string): Promise<void>;
+  workspaceGet(workspaceId: string): Promise<WorkspaceInfo | null>;
 }
 
 export class HerdrError extends Error {

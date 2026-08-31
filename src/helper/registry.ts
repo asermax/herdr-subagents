@@ -28,6 +28,9 @@ export interface RegistryEntry {
   // must also be woken when the child RESUMES, which is the one case where
   // `working` is a wake.
   acked_status?: AgentStatus;
+  // Set when the child was spawned into a git worktree. `close` reads it to
+  // decide whether this child is the last one out of the checkout.
+  worktree?: { path: string; branch?: string };
 }
 
 export interface ListedChild extends RegistryEntry {

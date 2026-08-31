@@ -12,6 +12,10 @@ import type {
   HerdrClient,
   TabCreateParams,
   TabCreateResult,
+  WorkspaceInfo,
+  WorktreeCreateParams,
+  WorktreeInfo,
+  WorktreeOpened,
 } from "../src/helper/herdr-types";
 import { HerdrError } from "../src/helper/herdr-types";
 
@@ -41,6 +45,14 @@ export interface FakeOptions {
   // base, or undefined to use the base as-is. Models transient states (e.g. a
   // freshly-started agent briefly reporting `unknown`).
   snapshotByGetIndex?: Record<string, (callIndex: number) => Partial<AgentSnapshot> | undefined>;
+  // Worktrees herdr already knows about, for the create-or-join decision.
+  worktrees?: WorktreeInfo[];
+  // Tab count per workspace, for close's last-one-out check. Absent workspaces
+  // read as gone.
+  tabCounts?: Record<string, number>;
+  // Error thrown by worktreeRemove, keyed by workspace — models a dirty
+  // checkout refusing removal.
+  worktreeRemoveError?: Record<string, { code: string; message: string }>;
   // tab counter for ids.
 }
 
@@ -50,6 +62,7 @@ export class FakeHerdrClient implements HerdrClient {
   private tabIdCounter = 1;
   private getCallCount: Record<string, number> = {};
   private renames: Record<string, number> = {};
+  private worktreeCounter = 1;
 
   constructor(public opts: FakeOptions) {}
 
@@ -135,6 +148,40 @@ export class FakeHerdrClient implements HerdrClient {
       args: { paneId, statuses, fromSeq: opts.fromSeq, timeoutMs: opts.timeoutMs },
     });
     return waitForStatusOverSocket(this.opts.socketPath, paneId, statuses, opts);
+  }
+
+  async worktreeList(opts: { workspaceId?: string; cwd?: string }): Promise<WorktreeInfo[]> {
+    this.calls.push({ method: "worktree.list", args: { ...opts } });
+    return this.opts.worktrees ?? [];
+  }
+
+  async worktreeCreate(params: WorktreeCreateParams): Promise<WorktreeOpened> {
+    this.calls.push({ method: "worktree.create", args: { ...params } });
+    const workspaceId = `wt${this.worktreeCounter++}`;
+    return {
+      workspace_id: workspaceId,
+      path: `/worktrees/${params.branch ?? "unnamed"}`,
+      root_tab_id: `${workspaceId}:t0`,
+    };
+  }
+
+  async worktreeOpen(params: { path: string; label?: string }): Promise<WorktreeOpened> {
+    this.calls.push({ method: "worktree.open", args: { ...params } });
+    const workspaceId = `wt${this.worktreeCounter++}`;
+    return { workspace_id: workspaceId, path: params.path, root_tab_id: `${workspaceId}:t0` };
+  }
+
+  async worktreeRemove(workspaceId: string): Promise<void> {
+    this.calls.push({ method: "worktree.remove", args: { workspaceId } });
+    const err = this.opts.worktreeRemoveError?.[workspaceId];
+    if (err) throw new HerdrError(err.code, err.message);
+  }
+
+  async workspaceGet(workspaceId: string): Promise<WorkspaceInfo | null> {
+    this.calls.push({ method: "workspace.get", args: { workspaceId } });
+    const tabCount = this.opts.tabCounts?.[workspaceId];
+    if (tabCount === undefined) return null;
+    return { workspace_id: workspaceId, tab_count: tabCount };
   }
 
   methods(): string[] {

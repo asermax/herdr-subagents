@@ -1,4 +1,4 @@
-import type { AgentStatus, HerdrClient, ReadinessResult } from "./herdr-types.js";
+import type { AgentStatus, HerdrClient, ReadinessResult, WorktreeInfo } from "./herdr-types.js";
 import { HerdrError } from "./herdr-types.js";
 import type { RegistryEntry } from "./registry.js";
 import { readScreen } from "./screen.js";
@@ -46,6 +46,14 @@ export function childEnv(parentEnv: NodeJS.ProcessEnv = process.env): Record<str
   return env;
 }
 
+// A child asked for a git worktree. The branch name is the identity: an
+// unknown branch gets a fresh worktree, a branch already checked out is joined,
+// which is how a second child lands in a sibling's checkout.
+export interface WorktreeRequest {
+  branch?: string;
+  base?: string;
+}
+
 export interface SpawnInput {
   kind: "pi" | "claude";
   // Omitted for a generic spawn: the child runs the harness's default agent
@@ -62,11 +70,23 @@ export interface SpawnInput {
   // Extra env forwarded to the child's tab. Defaults to the gate plus
   // HERDR_SUBAGENT_* vars from process.env.
   passThroughEnv?: Record<string, string>;
+  // When present, the child gets its own checkout in a worktree workspace
+  // instead of a tab in the parent's. `cwd` stays the source checkout the
+  // worktree forks from.
+  worktree?: WorktreeRequest;
 }
 
 export interface SpawnResult {
   pane_id: string;
   tab_id: string;
+  // Present for a worktree child. The branch is what the parent reports to the
+  // human: it outlives the child and the checkout.
+  worktree?: ChildWorktree;
+}
+
+export interface ChildWorktree {
+  path: string;
+  branch?: string;
 }
 
 // Tunable bounds. These are the helper's, not the model's. Exhausting one
@@ -99,7 +119,7 @@ export const DEFAULT_BOUNDS: SpawnBounds = {
 };
 
 export interface SpawnFailure {
-  reason: "timeout" | "fast-fail" | "blocked" | "name" | "delivery" | "tab-create";
+  reason: "timeout" | "fast-fail" | "blocked" | "name" | "delivery" | "tab-create" | "worktree";
   message: string;
   // The half-created pane id, surfaced to the human if it cannot be cleaned up.
   pane_id?: string;
@@ -133,15 +153,35 @@ export async function spawnChild(
   const bounds = { ...DEFAULT_BOUNDS, ...deps.bounds };
   const { client } = deps;
 
-  // 1. Create the tab in the parent's workspace: parent's cwd, final label,
-  //    no focus, the gate plus forwarded HERDR_SUBAGENT_* env in its environment.
+  // 0. Resolve the worktree, when one was asked for. herdr models a worktree as
+  //    a workspace, so this decides WHERE the child's tab is created, not how.
+  //    Everything after is identical for both kinds of child.
+  let resolved: ResolvedWorktree | undefined;
+  if (input.worktree) {
+    try {
+      resolved = await resolveWorktree(client, input);
+    } catch (e) {
+      throw {
+        reason: "worktree",
+        message: `could not prepare the child's worktree: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      } satisfies SpawnFailure;
+    }
+  }
+
+  const workspaceId = resolved?.workspaceId ?? input.workspaceId;
+
+  // 1. Create the tab: the child's cwd is the worktree checkout when it has one
+  //    and the parent's cwd otherwise; final label, no focus, the gate plus
+  //    forwarded HERDR_SUBAGENT_* env in its environment.
   const env = input.passThroughEnv ?? childEnv();
   let tabId: string;
   let paneId: string;
   try {
     const tab = await client.tabCreate({
-      workspaceId: input.workspaceId,
-      cwd: input.cwd,
+      workspaceId,
+      cwd: resolved?.path ?? input.cwd,
       label: input.label,
       focus: false,
       env,
@@ -149,10 +189,25 @@ export async function spawnChild(
     paneId = tab.pane_id;
     tabId = tab.tab_id;
   } catch (e) {
+    // A worktree this spawn created has no children now and never will; take it
+    // back out rather than leaving an empty checkout behind.
+    if (resolved?.created) await removeQuietly(client, resolved.workspaceId);
     throw {
       reason: "tab-create",
       message: `could not create child tab: ${e instanceof Error ? e.message : String(e)}`,
     } satisfies SpawnFailure;
+  }
+
+  // The worktree workspace comes with a root tab of herdr's making. The child
+  // has its own tab now, so drop it — closing it after ours means the workspace
+  // is never empty, which would dispose it. Best-effort: a leftover shell in the
+  // worktree is untidy, not broken.
+  if (resolved?.rootTabId !== undefined) {
+    try {
+      await client.tabClose(resolved.rootTabId);
+    } catch {
+      // leave it; the human can close it.
+    }
   }
 
   // Track the child in the registry NOW — right after tabCreate, before
@@ -166,12 +221,13 @@ export async function spawnChild(
       await deps.tracking.add({
         pane_id: paneId,
         tab_id: tabId,
-        workspace_id: input.workspaceId,
+        workspace_id: workspaceId,
         label: input.label,
         agent: effectiveAgent,
         kind: input.kind,
         agent_name: effectiveAgent,
         status: "idle",
+        ...(resolved ? { worktree: toChildWorktree(resolved) } : {}),
       });
     } catch {
       // A registry write failure must not block the spawn; the watch's safety
@@ -229,7 +285,11 @@ export async function spawnChild(
       await verifyAndRename(client, paneId, input.agentName, bounds);
     }
 
-    return { pane_id: paneId, tab_id: tabId };
+    return {
+      pane_id: paneId,
+      tab_id: tabId,
+      ...(resolved ? { worktree: toChildWorktree(resolved) } : {}),
+    };
   } catch (e) {
     // A blocked child owns its tab: it is alive and answerable, so it survives
     // the cleanup below and stays in the registry (the watch keeps streaming
@@ -249,10 +309,17 @@ export async function spawnChild(
         // best-effort
       }
     }
-    try {
-      await client.tabClose(tabId);
-    } catch {
-      // Tab close failed — surface the pane id so the human can close it.
+    // A worktree this spawn created has no other children — take the checkout
+    // with the tab. A worktree it JOINED belongs to the siblings still in it, so
+    // only the tab goes.
+    if (resolved?.created) {
+      await removeQuietly(client, resolved.workspaceId);
+    } else {
+      try {
+        await client.tabClose(tabId);
+      } catch {
+        // Tab close failed — surface the pane id so the human can close it.
+      }
     }
     if (isSpawnFailure(e)) throw { ...e, pane_id: paneId, tab_id: tabId };
     throw fail("name", e instanceof Error ? e.message : String(e));
@@ -351,6 +418,88 @@ async function verifyAndRename(
     }
   }
   throw { reason: "name", message: `agent name did not land after ${bounds.maxRenameAttempts} attempts` } satisfies SpawnFailure;
+}
+
+interface ResolvedWorktree {
+  workspaceId: string;
+  path: string;
+  branch: string;
+  // The tab herdr opened with the workspace, for the caller to close once the
+  // child has its own. Absent when the workspace was already open — that tab
+  // belongs to whoever opened it.
+  rootTabId?: string;
+  // This spawn brought the worktree into being, so this spawn owns undoing it.
+  created: boolean;
+}
+
+function toChildWorktree(resolved: ResolvedWorktree): ChildWorktree {
+  return { path: resolved.path, branch: resolved.branch };
+}
+
+/**
+ * Create-or-join on branch name. A branch already checked out is joined, which
+ * is what puts a reviewer in an implementer's checkout; an unknown branch gets
+ * a fresh worktree. The branch defaults to the label, so a caller that just
+ * wants isolation gets it without naming anything.
+ */
+async function resolveWorktree(
+  client: HerdrClient,
+  input: SpawnInput,
+): Promise<ResolvedWorktree> {
+  const branch = input.worktree?.branch ?? slugifyAgentName(input.label);
+
+  // A list failure must not be read as "no such branch" — that would fork a
+  // second worktree off a branch that already has one.
+  const existing: WorktreeInfo | undefined = (
+    await client.worktreeList({ workspaceId: input.workspaceId })
+  ).find((w) => w.branch === branch);
+
+  // Already open: the join case. No root tab of ours to close.
+  if (existing?.open_workspace_id !== undefined) {
+    return {
+      workspaceId: existing.open_workspace_id,
+      path: existing.path,
+      branch,
+      created: false,
+    };
+  }
+
+  // Checked out but with no workspace on it — open one and adopt it.
+  if (existing !== undefined) {
+    const opened = await client.worktreeOpen({ path: existing.path, label: branch });
+    return {
+      workspaceId: opened.workspace_id,
+      path: opened.path,
+      branch,
+      ...(opened.root_tab_id !== undefined ? { rootTabId: opened.root_tab_id } : {}),
+      created: false,
+    };
+  }
+
+  const created = await client.worktreeCreate({
+    workspaceId: input.workspaceId,
+    branch,
+    label: branch,
+    ...(input.worktree?.base !== undefined ? { base: input.worktree.base } : {}),
+  });
+  return {
+    workspaceId: created.workspace_id,
+    path: created.path,
+    branch,
+    ...(created.root_tab_id !== undefined ? { rootTabId: created.root_tab_id } : {}),
+    created: true,
+  };
+}
+
+// Cleanup-path removal. A failure here is reported by the caller's own failure,
+// not this one: the spawn already went wrong and a stranded checkout is the
+// lesser problem.
+async function removeQuietly(client: HerdrClient, workspaceId: string): Promise<void> {
+  try {
+    await client.worktreeRemove(workspaceId);
+  } catch {
+    // leave it; `git worktree list` and the human can recover it.
+  }
 }
 
 export function isSpawnFailure(value: unknown): value is SpawnFailure {

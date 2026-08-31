@@ -24,7 +24,7 @@ You drive subagents through a single interface that wraps herdr. It handles the 
 
 {{invoke}}
 
-All children are herdr tabs in your workspace. One tab, one task.
+All children are herdr tabs. One tab, one task. A child lives in your workspace unless you give it a worktree, which puts it in a workspace of its own.
 
 ## When to delegate
 
@@ -39,6 +39,24 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 - The label is final; a child never renames its own tab.
 
 Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly. One failure is different: `blocked` means the child came up on a startup dialog and never became ready. It is alive, so its tab is kept and its pane comes back with the dialog on it — see **Blocked children**.
+
+## Worktrees
+
+`--worktree` gives a child its own checkout on its own branch, in its own herdr workspace, instead of sharing your working directory.
+
+Use it when the child will **write** — implementing, refactoring, fixing a bug — and above all when several children write at once. Sharing one checkout means they overwrite each other's edits and fight over the same branch.
+
+It is not the default. Research, planning, design, review — anything answered by reading — belongs in your own checkout, where the child sees the code you actually have and leaves nothing behind. A single child making changes is usually fine without one too; isolation pays off when there is something to isolate from.
+
+- `--branch` names the branch. A new name creates a worktree; an existing one joins it.
+- `--base` is what a new branch forks from. Omitted, your current HEAD.
+- Nothing else changes. You prompt, wait, collect, and close a worktree child exactly like any other.
+
+Several children can share one worktree. Point a second child at an existing branch and it lands in the same checkout alongside the first — that is how you put a reviewer on another child's work, or hand a branch from one child to the next. Children sharing a checkout see each other's edits, so give them non-overlapping work, or run them one after another.
+
+Close children as you always do. A worktree outlives its children until the last one goes, and closing that last child takes the checkout with it — so a sibling still working there is never disturbed. The branch always survives: name it when you report a child's result, or the work is lost to whoever reads the report.
+
+Uncommitted changes are never discarded. If the last child's checkout is dirty, the close reports that and the child stays open — prompt it to commit, then close it again.
 
 ## Prompt
 

@@ -95,6 +95,20 @@ describe("CLI --kind rejection", () => {
     expect(stderr).toMatch(/--agent must be a name, not a path/);
   });
 
+  it("rejects --branch without --worktree rather than ignoring it", async () => {
+    const { code, stderr } = await runCli([
+      "spawn",
+      "--kind",
+      "pi",
+      "--label",
+      "x",
+      "--branch",
+      "feat/login",
+    ]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--branch and --base require --worktree/);
+  });
+
   it("rejects an unknown subcommand", async () => {
     const { code, stderr } = await runCli(["bogus"]);
     expect(code).toBe(2);

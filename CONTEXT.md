@@ -85,7 +85,7 @@ A single interactive terminal in herdr. Identified by `pane_id` (for example `w1
 A herdr tab holding one pane. Identified by `tab_id`; also has a label and a number. Not addressable as an agent target — closing is id-only.
 
 **workspace**:
-A herdr workspace holding tabs. Identified by `workspace_id`. Children live in the parent's workspace so one sidebar is the fleet.
+A herdr workspace holding tabs. Identified by `workspace_id`. Children live in the parent's workspace so one sidebar is the fleet — unless they were given a worktree, which puts them in the worktree's own workspace.
 
 **pane_id**:
 The addressable id of a pane. Resolves as an agent target. Does not survive a herdr restart.
@@ -93,6 +93,10 @@ The addressable id of a pane. Resolves as an agent target. Does not survive a he
 **tab label**:
 The human-readable title of a tab, set by the parent at creation and final. For reading the sidebar; not addressable.
 _Avoid_: treating the label as an identifier.
+
+**worktree**:
+A git worktree, which herdr models as a workspace: `worktree create` opens one, and the `worktree` block on the workspace (repo root, checkout path) is what marks it in the sidebar. A child given one is a tab in that workspace, checked out on its own branch. The checkout is disposed when the last child closes; the branch outlives it.
+_Avoid_: calling it a directory — the presentation and the disposal are both workspace-level.
 
 **agent status**:
 herdr's state for a pane's agent: `idle | working | blocked | done | unknown`. Push, not polled — streamed via `pane.agent_status_changed`. The event carries the status but NOT `state_change_seq`; only `agent.get` reports the sequence, so anything reasoning about which state is new probes for it.

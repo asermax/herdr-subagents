@@ -3,6 +3,7 @@
 // only herdr socket client in the system. The pi extension does NOT get one.
 
 import { defineCommand, runMain } from "citty";
+import { closeChild } from "./close.js";
 import { collectChild, waitChild, type CollectDeps } from "./collect.js";
 import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
@@ -24,7 +25,16 @@ function isKind(v: string): v is Kind {
 // to the child's harness (a parent under development passes the same flags to
 // its children; production passes nothing). Not an allowlist — the complement
 // of our own surface, so future flags forward by default.
-const SPAWN_OWN_FLAGS = new Set(["kind", "agent", "label", "cwd", "workspace"]);
+const SPAWN_OWN_FLAGS = new Set([
+  "kind",
+  "agent",
+  "label",
+  "cwd",
+  "workspace",
+  "worktree",
+  "branch",
+  "base",
+]);
 
 const SUBCOMMANDS = new Set([
   "spawn",
@@ -117,6 +127,9 @@ interface SpawnArgs {
   label: string | undefined;
   cwd: string;
   workspace: string | undefined;
+  worktree: boolean | undefined;
+  branch: string | undefined;
+  base: string | undefined;
 }
 
 async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
@@ -139,10 +152,32 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   const cwd = args.cwd;
   const workspaceId = args.workspace ?? currentWorkspaceId();
 
+  // --branch/--base only mean something with a worktree. Silently ignoring them
+  // would put the child in the parent's checkout while the caller believes it
+  // is isolated.
+  if (!args.worktree && (args.branch !== undefined || args.base !== undefined)) {
+    fail("--branch and --base require --worktree", 2);
+  }
+
+  const worktree = args.worktree
+    ? {
+        ...(args.branch !== undefined ? { branch: args.branch } : {}),
+        ...(args.base !== undefined ? { base: args.base } : {}),
+      }
+    : undefined;
+
   const { client, registry } = buildDeps();
   try {
     const result: SpawnResult = await spawnChild(
-      { kind, agentName, label, cwd, workspaceId, passThroughArgs: passthroughArgs(rawArgs) },
+      {
+        kind,
+        agentName,
+        label,
+        cwd,
+        workspaceId,
+        passThroughArgs: passthroughArgs(rawArgs),
+        ...(worktree ? { worktree } : {}),
+      },
       { client, tracking: registry },
     );
     emit(result);
@@ -305,17 +340,12 @@ async function runClose(args: CloseArgs): Promise<void> {
   const tabId = args.tabId;
   if (!tabId) fail("usage: helper close <tab_id>", 2);
   const { client, registry } = buildDeps();
-  // Remove tracked children from the registry BEFORE closing the tab: the
-  // event-driven watch reads the registry when a child's subscription
-  // connection dies (the tab close kills it) to tell a deliberate close
-  // (closed, no wake) from an unexpected loss (gone, wakes). Registry-first
-  // makes that signal race-free — by the time the connection dies, the child
-  // is already gone from the registry.
-  for (const child of await registry.list()) {
-    if (child.tab_id === tabId) await registry.remove(child.pane_id);
+  try {
+    emit(await closeChild(tabId, { client, registry }));
+  } catch (e) {
+    emitError(e);
+    fail(`close failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-  await client.tabClose(tabId);
-  emit({ tab_id: tabId, closed: true });
 }
 
 // --- commands -----------------------------------------------------------
@@ -327,6 +357,9 @@ const spawn = defineCommand({
     label: { type: "string", description: "Tab label" },
     cwd: { type: "string", default: process.cwd(), description: "Child working directory" },
     workspace: { type: "string", description: "Workspace id" },
+    worktree: { type: "boolean", description: "Give the child its own git worktree" },
+    branch: { type: "string", description: "Worktree branch (default: the label)" },
+    base: { type: "string", description: "Ref a new worktree branch forks from" },
   },
   run: ({ args, rawArgs }) => runCatching(runSpawn(args, rawArgs)),
 });
