@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/asermax/herdr-subagents/compare/v0.6.0...v0.7.0) (2026-09-07)
+
+
+### Features
+
+* let a spawn name the model its child runs on ([eef52d6](https://github.com/asermax/herdr-subagents/commit/eef52d6186859945c2a00ff965b610765874e806))
+
 # [0.6.0](https://github.com/asermax/herdr-subagents/compare/v0.5.0...v0.6.0) (2026-08-31)
 
 
