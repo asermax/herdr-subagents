@@ -23,11 +23,12 @@ import {
 // to), so seq filtering must happen here. Streaming lets the wait drain past
 // stale replays and resolve on the first genuinely new match.
 //
-// Verified against herdr 0.8.x: a status event carries only
+// Verified against herdr 0.8.x and 0.9: a status event carries only
 // `{ pane_id, workspace_id, agent, agent_status }` — no `state_change_seq` —
-// and subscribing replays no status history. So the stale filter is inert in
-// production and the sequence a caller reasons about comes from `agent.get`
-// (see waitChild's probe and the prompt receipt).
+// and subscribing replays no status history (0.9 made that the rule for every
+// lifecycle event). So the stale filter is inert in production and the
+// sequence a caller reasons about comes from `agent.get` (see waitChild's
+// probe and the prompt receipt).
 
 const HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
 

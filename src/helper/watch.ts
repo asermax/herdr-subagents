@@ -25,8 +25,8 @@ import { HerdrError } from "./herdr-types.js";
 //     detected from `tab.closed`, correlated by `tab_id` against the registry:
 //     child already removed → `closed` (deliberate helper close); still tracked
 //     → `gone` (unexpected). `pane.created` (emit `pane_created`) discovers new
-//     children. Both replay a history flood on subscribe; debounced reconcile /
-//     `tab_id` correlation absorb it.
+//     children. herdr < 0.9 replayed a history flood on subscribe (0.9 starts
+//     live); the debounced reconcile / `tab_id` correlation absorb either.
 //
 // spawn writes the registry right after tabCreate (before agentStart), so a
 // `pane_created` reconcile finds the child already tracked. The registry is
@@ -44,7 +44,7 @@ export interface WatchDeps {
   store: RegistryStore;
   out?: (line: string) => void;
   // Debounce window (ms) for the reconcile triggered by a `pane_created` event.
-  // Coalesces the startup replay flood.
+  // Coalesces a burst of creations (and the pre-0.9 startup replay flood).
   createdDebounceMs?: number;
   // Interval (ms) of the safety reconcile that reopens disconnected/missing
   // subscriptions (discovery backstop for a missed event or a dropped fleet
@@ -103,9 +103,12 @@ class WatchEngine {
     this.write = deps.out ?? ((line: string) => process.stdout.write(line + "\n"));
   }
 
+  // Fleet first, registry second: since herdr 0.9 a subscription starts live,
+  // so a child spawned between the registry read and the subscribe would be
+  // seen by neither. Subscribing first makes the reconcile the snapshot.
   async start(): Promise<void> {
-    await this.reconcile();
     this.openFleet();
+    await this.reconcile();
     this.startSafety();
   }
 
