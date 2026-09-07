@@ -1,3 +1,10 @@
+## [0.7.1](https://github.com/asermax/herdr-subagents/compare/v0.7.0...v0.7.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* **helper:** subscribe to the fleet before reading the registry ([11fc208](https://github.com/asermax/herdr-subagents/commit/11fc208484e8c11433752b7bd4dd9cb1e986a03e))
+
 # [0.7.0](https://github.com/asermax/herdr-subagents/compare/v0.6.0...v0.7.0) (2026-09-07)
 
 
