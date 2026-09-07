@@ -41,6 +41,7 @@ describe("passthroughArgs skips spawn's own flags", () => {
       "--kind", "pi",
       "--agent", "doer",
       "--label", "do it",
+      "--model", "sonnet",
       "--cwd", "/repo",
       "--workspace", "w1Z",
     ]);
@@ -50,6 +51,7 @@ describe("passthroughArgs skips spawn's own flags", () => {
   it("drops own flags but keeps the surrounding forwarded flags", () => {
     const out = passthroughArgs([
       "--kind", "pi",
+      "--model", "sonnet",
       "--agent", "doer",
       "--label", "do it",
       "--extension", "/repo/ext",

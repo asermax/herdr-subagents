@@ -32,6 +32,7 @@ export interface SubagentOptions {
   kind?: string;
   agent?: string;
   label?: string;
+  model?: string;
   worktree?: boolean;
   branch?: string;
   base?: string;
@@ -58,6 +59,11 @@ const subagentSchema = Type.Object({
     kind: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("claude")])),
     agent: Type.Optional(Type.String({ description: "Agent name (not a path)" })),
     label: Type.Optional(Type.String({ description: "Tab label" })),
+    model: Type.Optional(
+      Type.String({
+        description: "Model the child's harness runs; omitted, the harness default (spawn only)",
+      }),
+    ),
     worktree: Type.Optional(
       Type.Boolean({ description: "Give the child its own git worktree (spawn only)" }),
     ),
@@ -92,7 +98,7 @@ export interface SubagentToolDetails {
  *
  * | command  | argv                                                    |
  * | -------- | ------------------------------------------------------- |
- * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--worktree [--branch <b>] [--base <r>]]` |
+ * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--model <model>] [--worktree [--branch <b>] [--base <r>]]` |
  * | prompt   | `prompt <pane_id> --body <body>`                        |
  * | wait     | `wait <pane_id> [--timeout <ms>]`                       |
  * | collect  | `collect <pane_id>`                                     |
@@ -108,6 +114,7 @@ export function buildHelperArgs(command: SubagentCommand, options: SubagentOptio
       if (options.kind) args.push("--kind", options.kind);
       if (options.agent) args.push("--agent", options.agent);
       if (options.label) args.push("--label", options.label);
+      if (options.model) args.push("--model", options.model);
       if (options.worktree) {
         args.push("--worktree");
         if (options.branch) args.push("--branch", options.branch);
@@ -401,7 +408,7 @@ const PROMPT_SNIPPET =
 
 const PROMPT_GUIDELINES: string[] = [
   "Use `subagent` to delegate separable work to a child agent running in its own herdr tab — one tab, one task.",
-  "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string }`. `kind` is required and defaults to your own harness. Returns `{ pane_id, tab_id }` — keep both.",
+  "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. Returns `{ pane_id, tab_id }` — keep both.",
   "`prompt`: options `{ pane_id: string, body: string }`. Wrap the body in `<supervisor-agent>…</supervisor-agent>` so the child knows it is a supervisor directive.",
   "`collect`: options `{ pane_id: string }`. Returns the child's last message as a descriptive summary including status, message, and whether the child is asking a question (`ask`). A question means reply, do not close.",
   "`close`: options `{ tab_id: string }`. Close a child once you have its result and no longer need it.",

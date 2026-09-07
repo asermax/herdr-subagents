@@ -36,6 +36,7 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 
 - `kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
 - `agent` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in the project's agent files, never a path.
+- `model` is optional. Omitted, the child runs its harness's default model. It is a model name of the child's harness, passed through verbatim, so what is valid depends on `kind`. When you spawn without a model named by the work or the caller, pick one yourself: judge the task's difficulty and choose the cheapest model available that can solve it. Reach for a heavier model only when the work needs the capability — mechanical tasks never do.
 - The label is final; a child never renames its own tab.
 
 Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly. One failure is different: `blocked` means the child came up on a startup dialog and never became ready. It is alive, so its tab is kept and its pane comes back with the dialog on it — see **Blocked children**.

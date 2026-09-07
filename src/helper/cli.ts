@@ -29,6 +29,7 @@ const SPAWN_OWN_FLAGS = new Set([
   "kind",
   "agent",
   "label",
+  "model",
   "cwd",
   "workspace",
   "worktree",
@@ -125,6 +126,7 @@ interface SpawnArgs {
   kind: string | undefined;
   agent: string | undefined;
   label: string | undefined;
+  model: string | undefined;
   cwd: string;
   workspace: string | undefined;
   worktree: boolean | undefined;
@@ -176,6 +178,7 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
         cwd,
         workspaceId,
         passThroughArgs: passthroughArgs(rawArgs),
+        ...(args.model !== undefined ? { model: args.model } : {}),
         ...(worktree ? { worktree } : {}),
       },
       { client, tracking: registry },
@@ -355,6 +358,10 @@ const spawn = defineCommand({
     kind: { type: "string", description: "Harness kind (pi|claude)" },
     agent: { type: "string", description: "Agent name (not a path)" },
     label: { type: "string", description: "Tab label" },
+    model: {
+      type: "string",
+      description: "Model the child's harness runs (a pi model id or claude alias)",
+    },
     cwd: { type: "string", default: process.cwd(), description: "Child working directory" },
     workspace: { type: "string", description: "Workspace id" },
     worktree: { type: "boolean", description: "Give the child its own git worktree" },

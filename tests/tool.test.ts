@@ -29,6 +29,12 @@ describe("buildHelperArgs", () => {
     ).toEqual(["spawn", "--kind", "claude", "--agent", "reviewer", "--label", "code review"]);
   });
 
+  it("spawn: model rides after label", () => {
+    expect(
+      buildHelperArgs("spawn", { kind: "pi", label: "fix", model: "sonnet" }),
+    ).toEqual(["spawn", "--kind", "pi", "--label", "fix", "--model", "sonnet"]);
+  });
+
   it("spawn: worktree flags ride along, and only with --worktree", () => {
     expect(
       buildHelperArgs("spawn", {

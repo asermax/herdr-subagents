@@ -63,6 +63,9 @@ export interface SpawnInput {
   // Parent's cwd — children live in the parent's workspace.
   cwd: string;
   workspaceId: string;
+  // Model name for the child's harness (--model on its start argv). Omitted,
+  // the harness's default model runs.
+  model?: string;
   // Extra argv forwarded to the child's harness (e.g. --extension, --skill on
   // pi; --plugin-directory on claude). Empty in production. Computed by the
   // caller from the parent's own launch argv (cli.ts).
@@ -337,11 +340,14 @@ async function startWithReadiness(
     // With --agent, name the child and pass --agent so it runs that role.
     // Without, omit --agent so the child runs the harness default agent; the
     // label is the tracking name herdr records (AgentStartParams.name is
-    // required).
+    // required). --model rides after --agent so both land before the
+    // forwarded dev-loop flags.
     const agentName = input.agentName;
-    const args = agentName !== undefined
-      ? ["--agent", agentName, ...(input.passThroughArgs ?? [])]
-      : [...(input.passThroughArgs ?? [])];
+    const args = [
+      ...(agentName !== undefined ? ["--agent", agentName] : []),
+      ...(input.model !== undefined ? ["--model", input.model] : []),
+      ...(input.passThroughArgs ?? []),
+    ];
     const agent = await client.agentStart({
       name: agentName ?? slugifyAgentName(input.label),
       kind: input.kind,

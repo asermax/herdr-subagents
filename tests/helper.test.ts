@@ -139,6 +139,35 @@ describe("spawn dev-loop forwarding", () => {
       "--skill", "/repo/build/out/pi/skills",
     ]);
   });
+
+  it("places --model after --agent on the child agent-start argv", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
+
+    await spawnChild(
+      defaultSpawnInput({ model: "sonnet", passThroughArgs: ["--skill", "/repo/skills"] }),
+      { client },
+    );
+
+    const startCall = client.calls.find((c) => c.method === "agent.start")!;
+    expect(startCall.args.args).toEqual([
+      "--agent", "doer",
+      "--model", "sonnet",
+      "--skill", "/repo/skills",
+    ]);
+  });
+
+  it("places --model on the argv for a generic child too", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
+
+    await spawnChild(defaultSpawnInput({ agentName: undefined, model: "sonnet" }), {
+      client,
+    });
+
+    const startCall = client.calls.find((c) => c.method === "agent.start")!;
+    expect(startCall.args.args).toEqual(["--model", "sonnet"]);
+  });
 });
 
 // --- spawn: generic (no --agent) ----------------------------------------
