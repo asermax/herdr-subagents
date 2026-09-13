@@ -37,7 +37,7 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 - `kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
 - `agent` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in the project's agent files, never a path.
 - `model` is optional. Omitted, the child runs its harness's default model. It is a model name of the child's harness, passed through verbatim, so what is valid depends on `kind`. When you spawn without a model named by the work or the caller, pick one yourself: judge the task's difficulty and choose the cheapest model available that can solve it. Reach for a heavier model only when the work needs the capability — mechanical tasks never do.
-- `body` is optional. Given, the task is delivered with the spawn — one call instead of spawn-then-prompt. Wrap it in `<supervisor-agent>…</supervisor-agent>` exactly as you would with `prompt`; delivery is verified the same way. Every message after it goes through `prompt`.
+- `body` is optional. Given, the task is delivered with the spawn — one call instead of spawn-then-prompt. Wrap it in `<supervisor-agent>…</supervisor-agent>` exactly as you would with `prompt`; delivery is verified the same way. Every message after it goes through `prompt`. Pass it as text, or through `body_file`/`--body-file` with a path to a file whose content is exactly the body (absolute, or relative to the cwd).
 - The label is final; a child never renames its own tab.
 
 Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly. Two failures are different: `blocked` means the child came up on a startup dialog and never became ready. It is alive, so its tab is kept and its pane comes back with the dialog on it — see **Blocked children**. And a spawn with `body` can fail at delivery: the child is alive and tracked, and the failure names its `pane_id` — retry with `prompt`.
@@ -62,7 +62,7 @@ Uncommitted changes are never discarded. If the last child's checkout is dirty, 
 
 ## Prompt
 
-Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it. The first prompt can ride `spawn`'s `body`; `prompt` is for every message after it.
+Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it. The first prompt can ride `spawn`'s `body`; `prompt` is for every message after it. Either takes the body as text or through a file path (`body_file` on the tool, `--body-file` on the CLI); the file's content is exactly the body, tag included.
 
 Delivery is verified: the interface watches for the child to act on the prompt and resends if the first send is dropped.
 

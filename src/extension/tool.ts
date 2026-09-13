@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { Type, type Static } from "typebox";
 import {
   defineTool,
@@ -39,6 +40,7 @@ export interface SubagentOptions {
   pane_id?: string;
   tab_id?: string;
   body?: string;
+  body_file?: string;
   timeout?: number;
   keys?: string;
   lines?: number;
@@ -68,6 +70,12 @@ const subagentSchema = Type.Object({
       Type.String({
         description:
           "Prompt body wrapped in <supervisor-agent> — the initial prompt on spawn, the message on prompt",
+      }),
+    ),
+    body_file: Type.Optional(
+      Type.String({
+        description:
+          "Path to a file whose content is the prompt body — alternative to body (absolute, or relative to the cwd)",
       }),
     ),
     worktree: Type.Optional(
@@ -103,8 +111,8 @@ export interface SubagentToolDetails {
  *
  * | command  | argv                                                    |
  * | -------- | ------------------------------------------------------- |
- * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--model <model>] [--body <body>] [--worktree [--branch <b>] [--base <r>]]` |
- * | prompt   | `prompt <pane_id> --body <body>`                        |
+ * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--model <model>] [--body <body> | --body-file <path>] [--worktree [--branch <b>] [--base <r>]]` |
+ * | prompt   | `prompt <pane_id> --body <body> | --body-file <path>`                        |
  * | wait     | `wait <pane_id> [--timeout <ms>]`                       |
  * | collect  | `collect <pane_id>`                                     |
  * | list     | `list`                                                  |
@@ -121,6 +129,7 @@ export function buildHelperArgs(command: SubagentCommand, options: SubagentOptio
       if (options.label) args.push("--label", options.label);
       if (options.model) args.push("--model", options.model);
       if (options.body) args.push("--body", options.body);
+      if (options.body_file) args.push("--body-file", options.body_file);
       if (options.worktree) {
         args.push("--worktree");
         if (options.branch) args.push("--branch", options.branch);
@@ -132,6 +141,7 @@ export function buildHelperArgs(command: SubagentCommand, options: SubagentOptio
       const args = ["prompt"];
       if (options.pane_id) args.push(options.pane_id);
       if (options.body) args.push("--body", options.body);
+      if (options.body_file) args.push("--body-file", options.body_file);
       return args;
     }
     case "wait": {
@@ -447,8 +457,8 @@ const PROMPT_SNIPPET =
 
 const PROMPT_GUIDELINES: string[] = [
   "Use `subagent` to delegate separable work to a child agent running in its own herdr tab — one tab, one task.",
-  "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string, body?: string, worktree?: boolean, branch?: string, base?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. Pass `body` (wrapped in `<supervisor-agent>…</supervisor-agent>`) to send the task in the same call. Returns `{ pane_id, tab_id }` — keep both.",
-  "`prompt`: options `{ pane_id: string, body: string }`. Follow-up prompts to a spawned child. Wrap the body in `<supervisor-agent>…</supervisor-agent>` so the child knows it is a supervisor directive.",
+  "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string, body?: string, body_file?: string, worktree?: boolean, branch?: string, base?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. Pass `body` (wrapped in `<supervisor-agent>…</supervisor-agent>`) to send the task in the same call, or `body_file` with a path to a file whose content is the body (absolute, or relative to the cwd). Returns `{ pane_id, tab_id }` — keep both.",
+  "`prompt`: options `{ pane_id: string, body: string }` or `{ pane_id: string, body_file: string }`. Follow-up prompts to a spawned child. Wrap the body in `<supervisor-agent>…</supervisor-agent>` so the child knows it is a supervisor directive.",
   "`collect`: options `{ pane_id: string }`. Returns the child's last message as a descriptive summary including status, message, and whether the child is asking a question (`ask`). A question means reply, do not close.",
   "`close`: options `{ tab_id: string }`. Close a child once you have its result and no longer need it.",
   "`list`: no options. Shows every tracked child and its status — the durable backstop for a missed wake.",
@@ -465,7 +475,11 @@ function missingOption(command: SubagentCommand, options: SubagentOptions): stri
     case "spawn":
       return !options.kind ? "kind" : !options.label ? "label" : undefined;
     case "prompt":
-      return !options.pane_id ? "pane_id" : options.body === undefined ? "body" : undefined;
+      return !options.pane_id
+        ? "pane_id"
+        : options.body === undefined && options.body_file === undefined
+          ? "body"
+          : undefined;
     case "wait":
     case "collect":
     case "read":
@@ -513,10 +527,26 @@ export const subagentTool: ToolDefinition<typeof subagentSchema, SubagentToolDet
 
     const argv = buildHelperArgs(command, options);
 
+    // A body_file needs its content for the result echo — the helper reads
+    // the file again for delivery. Only spawn and prompt carry a body.
+    let formatOptions = options;
+    if (
+      (command === "spawn" || command === "prompt") &&
+      options.body === undefined &&
+      options.body_file !== undefined
+    ) {
+      try {
+        formatOptions = { ...formatOptions, body: await readFile(options.body_file, "utf8") };
+      } catch (e) {
+        throw new Error(
+          `cannot read body_file ${options.body_file}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+
     // Resolve the child's label from the registry for commands that don't
     // carry it in options. Done before the main command so close — which
     // removes the registry entry — still finds the label.
-    let formatOptions = options;
     if (formatOptions.label === undefined && command !== "spawn" && command !== "list") {
       const label = await resolveLabel(formatOptions);
       if (label) formatOptions = { ...formatOptions, label };

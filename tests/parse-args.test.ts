@@ -34,6 +34,7 @@ describe("passthroughArgs skips spawn's own flags", () => {
       "--label", "do it",
       "--model", "sonnet",
       "--body", "do it",
+      "--body-file", "task.md",
       "--cwd", "/repo",
       "--workspace", "w1Z",
     ]);

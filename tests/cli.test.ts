@@ -177,7 +177,7 @@ describe("CLI help surface", () => {
 // what agent.get reports, whether agent prompt refuses, where delivered
 // bodies are logged. Delivery verification stays on the socket, served by
 // StubHerdrServer, so the full spawn→deliver→ack path runs end to end.
-describe("CLI spawn --body", () => {
+describe("CLI spawn/prompt --body", () => {
   let server: StubHerdrServer;
   let tmpDir: string;
   let stubEnv: NodeJS.ProcessEnv;
@@ -272,6 +272,55 @@ describe("CLI spawn --body", () => {
     expect(entry.acked_status).toBe("working");
   });
 
+  it("delivers the initial prompt from --body-file", async () => {
+    server.script([{ paneId: "wS:p1", status: "working", seq: 7 } as ScriptedEvent]);
+    const bodyFile = join(tmpDir, "task.md");
+    writeFileSync(bodyFile, "<supervisor-agent>do it from a file</supervisor-agent>");
+    const { code, stdout, stderr } = await runCli(
+      ["spawn", "--kind", "pi", "--agent", "doer", "--label", "x", "--body-file", bodyFile],
+      stubEnv,
+    );
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    const result = JSON.parse(stdout.trim());
+    expect(result.prompt).toEqual({ sent: true, status: "working" });
+    expect(readFileSync(join(tmpDir, "prompts.log"), "utf8")).toBe(
+      "<supervisor-agent>do it from a file</supervisor-agent>\n",
+    );
+  });
+
+  it("resolves a relative --body-file against the helper's cwd", async () => {
+    server.script([{ paneId: "wS:p1", status: "working", seq: 7 } as ScriptedEvent]);
+    writeFileSync(join(tmpDir, "task.md"), "<supervisor-agent>relative</supervisor-agent>");
+    const cwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      const { code, stdout } = await runCli(
+        ["spawn", "--kind", "pi", "--agent", "doer", "--label", "x", "--body-file", "task.md"],
+        stubEnv,
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim()).prompt).toEqual({ sent: true, status: "working" });
+      expect(readFileSync(join(tmpDir, "prompts.log"), "utf8")).toBe(
+        "<supervisor-agent>relative</supervisor-agent>\n",
+      );
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  it("prompt delivers a --body-file body", async () => {
+    server.script([{ paneId: "wS:p1", status: "working", seq: 7 } as ScriptedEvent]);
+    const bodyFile = join(tmpDir, "reply.md");
+    writeFileSync(bodyFile, "<supervisor-agent>and now this</supervisor-agent>");
+    const { code, stdout } = await runCli(["prompt", "wS:p1", "--body-file", bodyFile], stubEnv);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.trim())).toEqual({ pane_id: "wS:p1", sent: true, status: "working" });
+    expect(readFileSync(join(tmpDir, "prompts.log"), "utf8")).toBe(
+      "<supervisor-agent>and now this</supervisor-agent>\n",
+    );
+  });
+
   it("spawn without --body emits the plain spawn result", async () => {
     const { code, stdout } = await runCli(
       ["spawn", "--kind", "pi", "--agent", "doer", "--label", "x"],
@@ -307,6 +356,50 @@ describe("CLI spawn --body", () => {
     const entry = readEntry();
     expect(entry).toBeTruthy();
     expect(entry.acked_seq).toBeUndefined();
+  });
+});
+
+describe("CLI --body-file validation", () => {
+  it("rejects --body together with --body-file (spawn)", async () => {
+    const { code, stderr } = await runCli([
+      "spawn",
+      "--kind",
+      "pi",
+      "--label",
+      "x",
+      "--body",
+      "a",
+      "--body-file",
+      "b",
+    ]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/mutually exclusive/);
+  });
+
+  it("rejects --body together with --body-file (prompt)", async () => {
+    const { code, stderr } = await runCli(["prompt", "w1Z:p1", "--body", "a", "--body-file", "b"]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/mutually exclusive/);
+  });
+
+  it("rejects an unreadable --body-file before creating the child", async () => {
+    const { code, stderr } = await runCli([
+      "spawn",
+      "--kind",
+      "pi",
+      "--label",
+      "x",
+      "--body-file",
+      "/nonexistent/task.md",
+    ]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/cannot read --body-file/);
+  });
+
+  it("requires one of --body/--body-file on prompt", async () => {
+    const { code, stderr } = await runCli(["prompt", "w1Z:p1"]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--body or --body-file is required/);
   });
 });
 

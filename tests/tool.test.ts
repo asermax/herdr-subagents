@@ -93,6 +93,27 @@ describe("buildHelperArgs", () => {
     ]);
   });
 
+  it("spawn: body_file maps to --body-file", () => {
+    expect(buildHelperArgs("spawn", { kind: "pi", label: "fix", body_file: "task.md" })).toEqual([
+      "spawn",
+      "--kind",
+      "pi",
+      "--label",
+      "fix",
+      "--body-file",
+      "task.md",
+    ]);
+  });
+
+  it("prompt: body_file maps to --body-file", () => {
+    expect(buildHelperArgs("prompt", { pane_id: "w1", body_file: "task.md" })).toEqual([
+      "prompt",
+      "w1",
+      "--body-file",
+      "task.md",
+    ]);
+  });
+
   it("wait: positional pane_id + optional --timeout", () => {
     expect(buildHelperArgs("wait", { pane_id: "w1" })).toEqual(["wait", "w1"]);
     expect(buildHelperArgs("wait", { pane_id: "w1", timeout: 5000 })).toEqual([
@@ -400,6 +421,53 @@ describe("subagentTool.execute", () => {
         {} as never,
       ),
     ).rejects.toThrow("`label` is required for `spawn`");
+  });
+
+  it("prompt with body_file satisfies the body requirement and echoes the file content", async () => {
+    const bodyFile = join(tmpDir, "task.md");
+    writeFileSync(bodyFile, "<supervisor-agent>do it from a file</supervisor-agent>");
+    // The stub answers the label-resolution `list` call and the prompt call.
+    pointAtStub(
+      `if [ "$1" = "list" ]; then echo '{\"children\":[]}'; else echo '{\"pane_id\":\"w1\",\"sent\":true}'; fi`,
+    );
+    const result = await subagentTool.execute(
+      "call-1",
+      { command: "prompt", options: { pane_id: "w1", body_file: bodyFile } },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect((result.content[0] as { text: string }).text).toBe(
+      "Sent prompt to subagent subagent:\ndo it from a file",
+    );
+  });
+
+  it("spawn with body_file reports the prompt it sent", async () => {
+    const bodyFile = join(tmpDir, "task.md");
+    writeFileSync(bodyFile, "<supervisor-agent>do it from a file</supervisor-agent>");
+    pointAtStub(`echo '{\"pane_id\":\"w1\",\"tab_id\":\"t1\",\"prompt\":{\"sent\":true,\"status\":\"working\"}}'`);
+    const result = await subagentTool.execute(
+      "call-1",
+      { command: "spawn", options: { kind: "pi", label: "task", body_file: bodyFile } },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect((result.content[0] as { text: string }).text).toBe(
+      "Started subagent task (pane_id w1, tab_id t1) and sent its prompt:\ndo it from a file",
+    );
+  });
+
+  it("rejects an unreadable body_file without invoking the helper", async () => {
+    await expect(
+      subagentTool.execute(
+        "call-1",
+        { command: "prompt", options: { pane_id: "w1", body_file: join(tmpDir, "nope.md") } },
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow(/cannot read body_file/);
   });
 
   it("throws a descriptive error on helper failure", async () => {

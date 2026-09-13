@@ -3,6 +3,7 @@
 // only herdr socket client in the system. The pi extension does NOT get one.
 
 import { defineCommand, runMain } from "citty";
+import { readFile } from "node:fs/promises";
 import { closeChild } from "./close.js";
 import { collectChild, waitChild, type CollectDeps } from "./collect.js";
 import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
@@ -31,6 +32,7 @@ const SPAWN_OWN_FLAGS = new Set([
   "label",
   "model",
   "body",
+  "body-file",
   "cwd",
   "workspace",
   "worktree",
@@ -123,12 +125,34 @@ async function runCatching(p: Promise<void>): Promise<void> {
 
 // --- subcommand bodies --------------------------------------------------
 
+// The file's content is exactly what --body would have carried, tags and
+// all. Relative paths resolve against the helper's working directory.
+// Resolved before the child is created so a bad path never leaves a live
+// child behind.
+async function resolveBody(
+  body: string | undefined,
+  bodyFile: string | undefined,
+): Promise<string | undefined> {
+  if (body !== undefined && bodyFile !== undefined) {
+    fail("--body and --body-file are mutually exclusive", 2);
+  }
+
+  if (bodyFile === undefined) return body;
+
+  try {
+    return await readFile(bodyFile, "utf8");
+  } catch (e) {
+    fail(`cannot read --body-file ${bodyFile}: ${e instanceof Error ? e.message : String(e)}`, 2);
+  }
+}
+
 interface SpawnArgs {
   kind: string | undefined;
   agent: string | undefined;
   label: string | undefined;
   model: string | undefined;
   body: string | undefined;
+  bodyFile: string | undefined;
   cwd: string;
   workspace: string | undefined;
   worktree: boolean | undefined;
@@ -159,6 +183,8 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   if (!args.worktree && (args.branch !== undefined || args.base !== undefined)) {
     fail("--branch and --base require --worktree", 2);
   }
+
+  const body = await resolveBody(args.body, args.bodyFile);
 
   const cwd = args.cwd;
   const workspaceId = args.workspace ?? currentWorkspaceId();
@@ -196,7 +222,7 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
     fail(`spawn failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  if (args.body === undefined) {
+  if (body === undefined) {
     emit(result);
     return;
   }
@@ -205,7 +231,7 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   // standalone `prompt` would, so a later `wait` sees the same baseline
   // (ADR-0008). The body arrives already wrapped in <supervisor-agent>.
   try {
-    const receipt = await deliverPrompt(client, result.pane_id, args.body, DEFAULT_PROMPT_BOUNDS);
+    const receipt = await deliverPrompt(client, result.pane_id, body, DEFAULT_PROMPT_BOUNDS);
     await ackDelivery(registry, result.pane_id, receipt);
     emit({ ...result, prompt: { sent: true, status: receipt.status } });
   } catch (e) {
@@ -213,7 +239,7 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
     // must not read as a dead child — report the pane so the parent can retry
     // with `prompt`.
     const cause = e instanceof Error ? e.message : String(e);
-    const message = `the child ${result.pane_id} is alive but the prompt was not delivered (${cause}) — retry with 'helper prompt ${result.pane_id} --body <text>'`;
+    const message = `the child ${result.pane_id} is alive but the prompt was not delivered (${cause}) — retry with 'helper prompt ${result.pane_id} --body <text>' or '--body-file <path>'`;
     emitError({ reason: "delivery", message });
     fail(`spawn ok, prompt not delivered: ${message}`);
   }
@@ -222,13 +248,14 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
 interface PromptArgs {
   paneId: string | undefined;
   body: string | undefined;
+  bodyFile: string | undefined;
 }
 
 async function runPrompt(args: PromptArgs): Promise<void> {
   const paneId = args.paneId;
-  if (!paneId) fail("usage: helper prompt <pane_id> --body <text>", 2);
-  const body = args.body;
-  if (body === undefined) fail("--body is required", 2);
+  if (!paneId) fail("usage: helper prompt <pane_id> --body <text> | --body-file <path>", 2);
+  const body = await resolveBody(args.body, args.bodyFile);
+  if (body === undefined) fail("--body or --body-file is required", 2);
   const { client, registry } = buildDeps();
   // The body arrives already wrapped in <supervisor-agent> by the caller.
   try {
@@ -384,6 +411,10 @@ const spawn = defineCommand({
       type: "string",
       description: "Initial prompt, wrapped in <supervisor-agent>…</supervisor-agent>",
     },
+    bodyFile: {
+      type: "string",
+      description: "Read the initial prompt from a file (its content is what --body would carry)",
+    },
     cwd: { type: "string", default: process.cwd(), description: "Child working directory" },
     workspace: { type: "string", description: "Workspace id" },
     worktree: { type: "boolean", description: "Give the child its own git worktree" },
@@ -399,6 +430,7 @@ const prompt = defineCommand({
     // message + exit 2) instead of citty's default error.
     paneId: { type: "positional", required: false, description: "Pane id" },
     body: { type: "string", description: "Prompt body" },
+    bodyFile: { type: "string", description: "Read the prompt body from a file" },
   },
   run: ({ args }) => runCatching(runPrompt(args)),
 });
