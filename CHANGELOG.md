@@ -1,3 +1,10 @@
+## [0.9.2](https://github.com/asermax/herdr-subagents/compare/v0.9.1...v0.9.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **helper:** treat a prompt to a working child as a delivered steer ([dc194d5](https://github.com/asermax/herdr-subagents/commit/dc194d596c039af5c9cf774bd08eb9d672d683bd))
+
 ## [0.9.1](https://github.com/asermax/herdr-subagents/compare/v0.9.0...v0.9.1) (2026-09-13)
 
 
