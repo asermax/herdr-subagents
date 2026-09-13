@@ -1,3 +1,10 @@
+## [0.9.1](https://github.com/asermax/herdr-subagents/compare/v0.9.0...v0.9.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **extension:** stop echoing the prompt body in tool results ([3baf6d1](https://github.com/asermax/herdr-subagents/commit/3baf6d1ace8bb475d685166b95230705b4fb5d75))
+
 # [0.9.0](https://github.com/asermax/herdr-subagents/compare/v0.8.1...v0.9.0) (2026-09-13)
 
 
