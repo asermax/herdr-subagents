@@ -1,3 +1,10 @@
+# [0.8.0](https://github.com/asermax/herdr-subagents/compare/v0.7.1...v0.8.0) (2026-09-13)
+
+
+### Features
+
+* let a spawn deliver its first prompt ([f36bc02](https://github.com/asermax/herdr-subagents/commit/f36bc020682204a3f3ad5039a1e49b380fcd6c5d))
+
 ## [0.7.1](https://github.com/asermax/herdr-subagents/compare/v0.7.0...v0.7.1) (2026-09-07)
 
 
