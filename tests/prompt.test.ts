@@ -43,6 +43,59 @@ afterEach(async () => {
 });
 
 describe("prompt verify-delivery", () => {
+  it("treats a send to a working child as a delivered steer — one send, no wait", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = {
+      "w1Z:p1": makeSnapshot({ agent_status: "working", state_change_seq: 42 }),
+    };
+    // A steer emits nothing — no event ever lands. Under the old rule this
+    // script timed out three times and failed; the steer rule must not need it.
+    server.script([]);
+
+    const receipt = await deliverPrompt(
+      client,
+      "w1Z:p1",
+      "<supervisor-agent>keep going</supervisor-agent>",
+      { maxPromptAttempts: 3, deliveryStallMs: 1000 },
+    );
+
+    const prompts = client.calls.filter((c) => c.method === "agent.prompt");
+    expect(prompts).toHaveLength(1);
+    expect(client.calls.some((c) => c.method === "events.wait")).toBe(false);
+    expect(receipt).toEqual({
+      before_seq: 42,
+      status: "working",
+      seq: 42,
+      // A working receipt acks its own seq: the wait the parent arms next must
+      // still fire on the end of the steered turn.
+      acked_seq: 42,
+    });
+  });
+
+  it("does not ack a steer whose turn ended under the send", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = {
+      "w1Z:p1": makeSnapshot({ agent_status: "working", state_change_seq: 42 }),
+    };
+    // The post-send probe (get #2) reads the turn as already over.
+    client.opts.snapshotByGetIndex = {
+      "w1Z:p1": (idx) => (idx >= 2 ? { agent_status: "done", state_change_seq: 43 } : undefined),
+    };
+    server.script([]);
+
+    const receipt = await deliverPrompt(
+      client,
+      "w1Z:p1",
+      "<supervisor-agent>keep going</supervisor-agent>",
+      { maxPromptAttempts: 3, deliveryStallMs: 1000 },
+    );
+
+    expect(receipt.status).toBe("done");
+    // The end-of-turn at 43 is a wake the parent has not had — ack the
+    // pre-send seq so the next wait still reports it (ADR-0008).
+    expect(receipt.acked_seq).toBe(42);
+  });
+
   it("resolves on the first send when a status change lands in the window", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
     client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };

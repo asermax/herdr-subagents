@@ -64,7 +64,7 @@ Uncommitted changes are never discarded. If the last child's checkout is dirty, 
 
 Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it. The first prompt can ride `spawn`'s `body`; `prompt` is for every message after it. Either takes the body as text or through a file path (`body_file` on the tool, `--body-file` on the CLI); the file's content is exactly the body, tag included.
 
-Delivery is verified: the interface watches for the child to act on the prompt and resends if the first send is dropped.
+Delivery is verified: the interface watches for the child to act on the prompt and resends if the first send is dropped. A child that is already `working` receives the prompt as a steer — no state change follows a steer, so the accepted submission itself is the receipt and the message is never resent.
 
 {{wake}}
 

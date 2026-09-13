@@ -6,7 +6,8 @@ import type { SpawnFailure } from "./spawn.js";
 // call is NOT evidence the child received it: on cold spins the first prompt
 // is dropped on 7 of 8 attempts. So we send, watch for a status change or
 // state-sequence advance within the stall window, and resend if nothing
-// arrives (bounded). No transition in the window = dropped.
+// arrives (bounded). No transition in the window = dropped. The exception is
+// a child already `working` — a steer — handled inside the loop.
 
 // Tunable bounds for delivery verification. Exhausting the attempts means the
 // child never acted on the prompt.
@@ -55,6 +56,21 @@ export async function deliverPrompt(
     const before = await client.agentGet(paneId);
     const fromSeq = before?.state_change_seq ?? 0;
     await client.agentPrompt(paneId, body);
+
+    // A steer: the child was already working when we sent. A steer changes
+    // nothing observable — herdr emits status events only on change, and a
+    // turn that keeps running advances no sequence — so the wait below can
+    // never confirm it and would resend a message the child is already acting
+    // on (three identical steers, then a false failure). A working harness is
+    // live and consuming input, so herdr's accepted submission is itself the
+    // delivery evidence; herdr's own `agent prompt --wait` skips the
+    // working-transition check for the same reason. The probe below still
+    // catches the races: a turn that ended under the send reads as done with
+    // a new seq, and `receipt` refuses to ack it so the parent still wakes.
+    if (before?.agent_status === "working") {
+      const now = await client.agentGet(paneId);
+      return receipt(fromSeq, now ?? before);
+    }
 
     // Any of: a status change away from idle/done, or a state-sequence
     // advance, counts as the prompt landing.
