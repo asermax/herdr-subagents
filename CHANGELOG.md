@@ -1,3 +1,10 @@
+# [0.9.0](https://github.com/asermax/herdr-subagents/compare/v0.8.1...v0.9.0) (2026-09-13)
+
+
+### Features
+
+* let a prompt body come from a file ([d0023fd](https://github.com/asermax/herdr-subagents/commit/d0023fdda338a060e28e073d9e68bd93808a5b01))
+
 ## [0.8.1](https://github.com/asermax/herdr-subagents/compare/v0.8.0...v0.8.1) (2026-09-13)
 
 
