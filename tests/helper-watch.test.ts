@@ -412,7 +412,9 @@ describe("parent-role status line", () => {
     expect(sendWake).toHaveBeenCalledWith(
       expect.objectContaining({
         customType: WAKE_TYPE,
-        content: expect.stringContaining("reviewer"),
+        // The wake names the `subagent` tool and the collect command — never
+        // the helper CLI.
+        content: expect.stringMatching(/reviewer.*subagent tool.*collect.*w1Z:p1/s),
         display: true,
       }),
       { triggerTurn: true },
@@ -445,7 +447,7 @@ describe("parent-role status line", () => {
     expect(sendWake).not.toHaveBeenCalled();
   });
 
-  it("wakes on blocked, pointing at the pane and at the human", () => {
+  it("wakes on blocked, pointing at the subagent tool, the pane, and the human", () => {
     const { state, sink, sendWake } = setup();
     processLine(state, sink, sendWake, line("w1Z:p1", "working", "cleaner"));
     processLine(state, sink, sendWake, line("w1Z:p1", "blocked", "cleaner"));
@@ -453,7 +455,7 @@ describe("parent-role status line", () => {
     expect(sendWake).toHaveBeenCalledTimes(1);
     expect(sendWake).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringMatching(/read w1Z:p1.*human/s),
+        content: expect.stringMatching(/subagent tool.*read.*pane_id w1Z:p1.*human/s),
       }),
       { triggerTurn: true },
     );

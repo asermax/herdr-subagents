@@ -5,9 +5,10 @@
  *                 claude arms a background wait). Injected from the per-harness
  *                 wake fragment at src/skills/delegate/{pi,claude}.md.
  * `{{helper}}`  — the helper's absolute path, resolved per artifact root at
- *                 build time (the Claude plugin's root variable on claude, the
- *                 package directory on pi). Consumed inside the claude invoke
- *                 fragment; absent from the pi invoke fragment (pi uses a tool).
+ *                 build time. Consumed only inside the claude invoke fragment;
+ *                 pi omits the token entirely — the `subagent` tool is the
+ *                 model's only interface there, and the skill never names
+ *                 the helper.
  * `{{invoke}}`  — content placeholder for the command-invocation divergence
  *                 (pi uses the `subagent` tool; claude uses bash). Injected
  *                 from the per-harness invoke fragment at

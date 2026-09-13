@@ -41,18 +41,14 @@ export function tokenMapFor(harness: Harness): TokenMap {
   return {
     wake: readWakeFragment(harness),
     invoke: readInvokeFragment(harness),
-    // Both harnesses resolve the helper at RUNTIME so a skill built anywhere
-    // (a CI build included) works on any install, not just the build host:
-    //  - claude expands $CLAUDE_PLUGIN_ROOT (set by claude at plugin load).
-    //  - pi uses $HERDR_SUBAGENT_HELPER (set by the dev loop, and by the
-    //    extension at session start from its resolved helper path), falling
-    //    back to the bare `herdr-helper` the package's `bin` puts on PATH.
-    // On pi the invoke fragment uses the `subagent` tool, not bash — but the
-    // wake fragment still references {{helper}} (the extension's watch spawn),
-    // so the token stays in both maps.
-    helper:
-      harness === "claude"
-        ? "${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN
-        : "${HERDR_SUBAGENT_HELPER:-" + HELPER_BIN + "}",
+    // The helper token is claude-only: the claude invoke fragment names the
+    // binary (resolved at RUNTIME — $CLAUDE_PLUGIN_ROOT, set by claude at
+    // plugin load — so a skill built anywhere works on any install). The pi
+    // skill never mentions the helper: the `subagent` tool is the model's
+    // only interface on pi, so the map omits the token entirely and the
+    // coverage assert would fail any attempt to reintroduce it.
+    ...(harness === "claude"
+      ? { helper: "${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN }
+      : {}),
   };
 }

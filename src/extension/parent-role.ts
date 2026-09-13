@@ -168,17 +168,19 @@ export function processLine(
   );
 }
 
-// The wake carries no payload: a one-line nudge naming the child and state, so
-// the parent knows what to do next. The result is NOT here.
+// The wake carries no payload: a one-line nudge naming the child, its
+// pane id, and the `subagent` tool command to run next, so the parent knows
+// what to do without touching anything but the tool. The result is NOT here.
+// The helper CLI is never named — on pi the tool is the model's only surface.
 function wakeContent(rec: ChildStatus): string {
   const name = rec.label ? `"${rec.label}"` : rec.pane_id;
   if (rec.status === "blocked") {
-    return `Child ${name} is blocked on a dialog. Run \`helper read ${rec.pane_id}\` to see what it is asking, then tell the human to answer it in that tab.`;
+    return `Child ${name} is blocked on a dialog. Use the subagent tool — read, pane_id ${rec.pane_id} — to see what it is asking, then tell the human to answer it in that tab.`;
   }
   if (rec.status === "working") {
     return `Child ${name} is no longer blocked and is working again.`;
   }
-  return `Child ${name} reached ${rec.status}. Run \`helper collect ${rec.pane_id}\` to read its result.`;
+  return `Child ${name} reached ${rec.status}. Use the subagent tool — collect, pane_id ${rec.pane_id} — to read its result.`;
 }
 
 // The minimal surface the parent role reads from a spawned `helper watch`.

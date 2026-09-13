@@ -183,8 +183,20 @@ interface CollectResultJson {
   error?: string;
 }
 
+interface SpawnResultJson {
+  pane_id: string;
+  tab_id: string;
+}
+
+interface WaitResultJson {
+  pane_id: string;
+  status: string;
+  timed_out?: boolean;
+}
+
 interface ListChildJson {
   pane_id: string;
+  tab_id: string;
   label: string;
   status: string;
 }
@@ -245,10 +257,12 @@ export function formatResult(
 ): string {
   switch (command) {
     case "spawn": {
+      const r = json as SpawnResultJson;
       const name = childName(options.label, options.agent);
-      if (!options.body) return `Started subagent ${name}`;
+      const ids = ` (pane_id ${r.pane_id}, tab_id ${r.tab_id})`;
+      if (!options.body) return `Started subagent ${name}${ids}`;
       const body = stripSupervisorTag(options.body);
-      return `Started subagent ${name} and sent its prompt:\n${body}`;
+      return `Started subagent ${name}${ids} and sent its prompt:\n${body}`;
     }
     case "prompt": {
       const name = childName(options.label);
@@ -256,21 +270,27 @@ export function formatResult(
       return `Sent prompt to subagent ${name}:\n${body}`;
     }
     case "wait": {
+      const r = json as WaitResultJson;
       const name = childName(options.label);
-      return `Waited for subagent ${name}`;
+      if (r.timed_out) {
+        return `Timed out waiting for subagent ${name} — nothing new; re-arm the wait`;
+      }
+      return `Subagent ${name} is ${r.status}`;
     }
     case "collect": {
       const r = json as CollectResultJson;
       const name = childName(r.label, r.agent, options.label);
-      if (r.error) return `Subagent ${name} errored: ${r.error}`;
-      if (r.ask) return `Subagent ${name} is asking:\n${r.message ?? ""}`;
-      if (r.message) return `Subagent ${name}:\n${r.message}`;
-      return `Subagent ${name} has no message yet`;
+      if (r.error) return `Subagent ${name} (${r.pane_id}) errored: ${r.error}`;
+      if (r.ask) return `Subagent ${name} (${r.pane_id}) is asking:\n${r.message ?? ""}`;
+      if (r.message) return `Subagent ${name} (${r.pane_id}, ${r.status}):\n${r.message}`;
+      return `Subagent ${name} (${r.pane_id}) is ${r.status} with no message yet`;
     }
     case "list": {
       const r = json as ListResultJson;
       if (!r.children || r.children.length === 0) return "No children tracked.";
-      const lines = r.children.map((c) => `  ${c.label || c.pane_id}`);
+      const lines = r.children.map(
+        (c) => `  ${c.label || c.pane_id}: ${c.status} (pane_id ${c.pane_id}, tab_id ${c.tab_id})`,
+      );
       return `Fleet (${r.children.length}):\n${lines.join("\n")}`;
     }
     case "close": {
@@ -304,7 +324,7 @@ export function formatError(
   json: unknown | undefined,
   stderr: string,
 ): string {
-  const detail = errorMessage(json) || stderr.trim() || "helper exited with an error";
+  const detail = errorMessage(json) || stderr.trim() || "the subagent command exited with an error";
   // A spawn with a body can fail at delivery: the child is live and tracked,
   // so "failed to spawn" would misread as a dead child.
   if (command === "spawn" && failureReason(json) === "delivery") {
@@ -438,8 +458,29 @@ const PROMPT_GUIDELINES: string[] = [
   "Prefer breadth (several children at your level) over deep chains. Close children before spawning the next batch. Invoke `/skill:delegate` for the full protocol.",
 ];
 
+// Required options per command. Checked in `execute` before the helper runs
+// so a malformed call never reaches the CLI and surfaces its usage text.
+function missingOption(command: SubagentCommand, options: SubagentOptions): string | undefined {
+  switch (command) {
+    case "spawn":
+      return !options.kind ? "kind" : !options.label ? "label" : undefined;
+    case "prompt":
+      return !options.pane_id ? "pane_id" : options.body === undefined ? "body" : undefined;
+    case "wait":
+    case "collect":
+    case "read":
+      return !options.pane_id ? "pane_id" : undefined;
+    case "close":
+      return !options.tab_id ? "tab_id" : undefined;
+    case "unblock":
+      return !options.pane_id ? "pane_id" : !options.keys ? "keys" : undefined;
+    case "list":
+      return undefined;
+  }
+}
+
 const DESCRIPTION = [
-  "Delegate work to child agents via the herdr helper.",
+  "Delegate work to child agents in herdr tabs.",
   "Pass `command` (spawn|prompt|wait|collect|list|close|read|unblock) and the relevant `options`.",
   "Each command returns a descriptive summary of what happened.",
 ].join(" ");
@@ -460,12 +501,22 @@ export const subagentTool: ToolDefinition<typeof subagentSchema, SubagentToolDet
     _ctx: ExtensionContext,
   ): Promise<AgentToolResult<SubagentToolDetails>> {
     const command = params.command;
-    const argv = buildHelperArgs(command, params.options ?? {});
+    const options = params.options ?? {};
+
+    // Validate here so a malformed call fails with the tool's own message;
+    // delegated to the helper, it would surface the CLI's usage text, which
+    // names the binary the model must never learn about.
+    const missing = missingOption(command, options);
+    if (missing !== undefined) {
+      throw new Error(`\`${missing}\` is required for \`${command}\``);
+    }
+
+    const argv = buildHelperArgs(command, options);
 
     // Resolve the child's label from the registry for commands that don't
     // carry it in options. Done before the main command so close — which
     // removes the registry entry — still finds the label.
-    let formatOptions = params.options ?? {};
+    let formatOptions = options;
     if (formatOptions.label === undefined && command !== "spawn" && command !== "list") {
       const label = await resolveLabel(formatOptions);
       if (label) formatOptions = { ...formatOptions, label };

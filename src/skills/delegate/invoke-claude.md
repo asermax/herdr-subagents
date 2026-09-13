@@ -10,3 +10,5 @@ The helper is a CLI invoked over bash by absolute path:
 {{helper}} read <pane_id> [--lines <n>]
 {{helper}} unblock <pane_id> --keys "<key> [key ...]"
 ```
+
+The interface above is your complete surface. In a genuine emergency, `herdr --help` lists herdr's raw commands; prefer handing the pane to the human over running herdr yourself.

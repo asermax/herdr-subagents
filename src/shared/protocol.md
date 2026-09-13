@@ -106,7 +106,7 @@ A child that stalls has no automatic timeout. Surface it to the human as a fleet
 
 ## Inspection (discouraged)
 
-The interface is your complete surface. If it reports something you cannot act on, surface the pane to the human rather than reaching past it. `herdr --help` lists herdr's raw commands for a genuine emergency; prefer handing the pane to the human over running herdr yourself.
+The interface is your complete surface. If it reports something you cannot act on, surface the pane to the human rather than reaching past it.
 
 ## Nesting
 

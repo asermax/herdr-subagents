@@ -51,9 +51,11 @@ export function _setResolveCwd(dir: string): void {
 }
 
 export default function herdrSubagentsExtension(pi: ExtensionAPI): void {
-  // Publish the helper's resolved path into the environment so the agent's
-  // bash — the delegate skill runs `${HERDR_SUBAGENT_HELPER:-herdr-helper}` —
-  // finds the helper on any install, not just the host that built the skill.
+  // Publish the helper's resolved path into the environment so nested
+  // sessions and the dev loop resolve the same binary (children inherit it;
+  // parent-role's helperPath reads the override). Internal plumbing only —
+  // never referenced in model-visible text: the `subagent` tool is the
+  // model's only interface on pi.
   // Respect an explicit override (the dev loop sets it before launching pi).
   if (process.env.HERDR_SUBAGENT_HELPER === undefined) {
     process.env.HERDR_SUBAGENT_HELPER = helperPath();

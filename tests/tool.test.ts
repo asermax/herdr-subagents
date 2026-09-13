@@ -194,9 +194,9 @@ describe("runHelper", () => {
 // --- formatResult -------------------------------------------------------
 
 describe("formatResult", () => {
-  it("spawn: names the subagent without pane/tab", () => {
+  it("spawn: names the subagent with its pane and tab ids", () => {
     const text = formatResult("spawn", { label: "review" }, { pane_id: "w1:p2", tab_id: "w1:t2" });
-    expect(text).toBe("Started subagent review");
+    expect(text).toBe("Started subagent review (pane_id w1:p2, tab_id w1:t2)");
   });
 
   it("spawn: with a body, reports the prompt it sent", () => {
@@ -205,7 +205,9 @@ describe("formatResult", () => {
       { label: "review", body: "<supervisor-agent>do it</supervisor-agent>" },
       { pane_id: "w1:p2", tab_id: "w1:t2", prompt: { sent: true, status: "working" } },
     );
-    expect(text).toBe("Started subagent review and sent its prompt:\ndo it");
+    expect(text).toBe(
+      "Started subagent review (pane_id w1:p2, tab_id w1:t2) and sent its prompt:\ndo it",
+    );
   });
 
   it("prompt: uses the label and strips the supervisor-agent tag", () => {
@@ -213,43 +215,54 @@ describe("formatResult", () => {
     expect(text).toBe("Sent prompt to subagent review:\ndo thing");
   });
 
-  it("wait: names the subagent", () => {
+  it("wait: reports the state it returned on", () => {
     const text = formatResult("wait", { pane_id: "w1", label: "review" }, { pane_id: "w1", status: "done" });
-    expect(text).toBe("Waited for subagent review");
+    expect(text).toBe("Subagent review is done");
   });
 
-  it("collect: message", () => {
+  it("wait: a timed-out wait reports nothing new and says to re-arm", () => {
+    const text = formatResult(
+      "wait",
+      { pane_id: "w1", label: "review" },
+      { pane_id: "w1", status: "working", timed_out: true },
+    );
+    expect(text).toBe("Timed out waiting for subagent review — nothing new; re-arm the wait");
+  });
+
+  it("collect: message with pane id and state", () => {
     const text = formatResult("collect", { pane_id: "w1" }, { pane_id: "w1", label: "rev", agent: "rev", status: "done", message: "all good" });
-    expect(text).toBe("Subagent rev:\nall good");
+    expect(text).toBe("Subagent rev (w1, done):\nall good");
   });
 
   it("collect: asking a question", () => {
     const text = formatResult("collect", { pane_id: "w1" }, { pane_id: "w1", label: "rev", agent: "rev", status: "done", message: "which file?", ask: true });
-    expect(text).toBe("Subagent rev is asking:\nwhich file?");
+    expect(text).toBe("Subagent rev (w1) is asking:\nwhich file?");
   });
 
   it("collect: errored", () => {
     const text = formatResult("collect", { pane_id: "w1" }, { pane_id: "w1", label: "rev", agent: "rev", status: "gone", error: "lost pane" });
-    expect(text).toBe("Subagent rev errored: lost pane");
+    expect(text).toBe("Subagent rev (w1) errored: lost pane");
   });
 
-  it("collect: no message", () => {
+  it("collect: no message, still names the state", () => {
     const text = formatResult("collect", { pane_id: "w1" }, { pane_id: "w1", label: "rev", agent: "rev", status: "blocked" });
-    expect(text).toBe("Subagent rev has no message yet");
+    expect(text).toBe("Subagent rev (w1) is blocked with no message yet");
   });
 
   it("list: empty fleet", () => {
     expect(formatResult("list", {}, { children: [] })).toBe("No children tracked.");
   });
 
-  it("list: non-empty fleet shows labels only", () => {
+  it("list: non-empty fleet shows label, state, and ids per child", () => {
     const text = formatResult("list", {}, {
       children: [
-        { pane_id: "w1:p2", label: "review", status: "done" },
-        { pane_id: "w1:p3", label: "tests", status: "working" },
+        { pane_id: "w1:p2", tab_id: "w1:t2", label: "review", status: "done" },
+        { pane_id: "w1:p3", tab_id: "w1:t3", label: "tests", status: "working" },
       ],
     });
-    expect(text).toBe("Fleet (2):\n  review\n  tests");
+    expect(text).toBe(
+      "Fleet (2):\n  review: done (pane_id w1:p2, tab_id w1:t2)\n  tests: working (pane_id w1:p3, tab_id w1:t3)",
+    );
   });
 
   it("read: shows the status and the pane", () => {
@@ -343,7 +356,50 @@ describe("subagentTool.execute", () => {
       {} as never,
     );
     expect(result.details).toEqual({ command: "spawn", exitCode: 0 });
-    expect((result.content[0] as { text: string }).text).toBe("Started subagent task");
+    expect((result.content[0] as { text: string }).text).toBe(
+      "Started subagent task (pane_id w1, tab_id t1)",
+    );
+  });
+
+  it("rejects a missing required option without invoking the helper", async () => {
+    const unset = stubHelper(`echo '{"children":[]}'`);
+    process.env.HERDR_SUBAGENT_HELPER = unset;
+    await expect(
+      subagentTool.execute(
+        "call-1",
+        { command: "prompt", options: { body: "hi" } },
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow("`pane_id` is required for `prompt`");
+    await expect(
+      subagentTool.execute(
+        "call-1",
+        { command: "close", options: {} },
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow("`tab_id` is required for `close`");
+    await expect(
+      subagentTool.execute(
+        "call-1",
+        { command: "spawn", options: { label: "x" } },
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow("`kind` is required for `spawn`");
+    await expect(
+      subagentTool.execute(
+        "call-1",
+        { command: "spawn", options: { kind: "pi" } },
+        undefined,
+        undefined,
+        {} as never,
+      ),
+    ).rejects.toThrow("`label` is required for `spawn`");
   });
 
   it("throws a descriptive error on helper failure", async () => {
@@ -351,7 +407,7 @@ describe("subagentTool.execute", () => {
     await expect(
       subagentTool.execute(
         "call-1",
-        { command: "spawn", options: {} },
+        { command: "spawn", options: { kind: "pi", label: "x" } },
         undefined,
         undefined,
         {} as never,

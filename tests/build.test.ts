@@ -13,13 +13,19 @@ import { assertCoverage } from "../build/coverage.ts";
  * with every placeholder resolved.
  */
 describe("build, all tokens", () => {
-  it("declares and consumes {{wake}}, {{helper}}, and {{invoke}} for each harness", () => {
+  it("declares and consumes the per-harness token set", () => {
+    const expectedKeys: Record<"pi" | "claude", string[]> = {
+      // The pi skill never names the helper — the `subagent` tool is the
+      // model's only interface there — so the pi map omits the token.
+      pi: ["invoke", "wake"],
+      claude: ["helper", "invoke", "wake"],
+    };
     for (const harness of ["pi", "claude"] as const) {
       const sources = coverageSources(harness);
       const map = tokenMapFor(harness);
       // Throws TokenNotConsumedError / UncoveredPlaceholderError on mismatch.
       expect(() => assertCoverage(sources, map)).not.toThrow();
-      expect(Object.keys(map).sort()).toEqual(["helper", "invoke", "wake"]);
+      expect(Object.keys(map).sort()).toEqual(expectedKeys[harness]);
     }
   });
 
@@ -48,16 +54,16 @@ describe("build, all tokens", () => {
 
         // The wake fragment was injected at {{wake}}.
         expect(body).toContain(wakeMarker[harness]);
-        // {{helper}} resolved to a RUNTIME path for both harnesses, so a skill
-        // built anywhere (CI included) works on any install: claude expands
-        // $CLAUDE_PLUGIN_ROOT; pi uses $HERDR_SUBAGENT_HELPER with a bare-name
-        // fallback the package bin puts on PATH. Both also appear inside the
-        // injected wake fragment (fixpoint substitution).
-        const helperInSkill: Record<"pi" | "claude", string> = {
-          pi: "${HERDR_SUBAGENT_HELPER:-" + HELPER_BIN + "}",
-          claude: "${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN,
-        };
-        expect(body).toContain(helperInSkill[harness]);
+        // The helper path resolves at RUNTIME so a skill built anywhere (CI
+        // included) works on any install: claude expands $CLAUDE_PLUGIN_ROOT.
+        // pi's skill must not name the helper at all — no env var, no binary —
+        // the `subagent` tool is the model's only interface there.
+        if (harness === "claude") {
+          expect(body).toContain("${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN);
+        } else {
+          expect(body).not.toContain("HERDR_SUBAGENT_HELPER");
+          expect(body).not.toContain(HELPER_BIN);
+        }
         // No placeholder survives anywhere in the emitted artifact.
         expect(body).not.toMatch(/\{\{wake\}\}/);
         expect(body).not.toMatch(/\{\{helper\}\}/);
