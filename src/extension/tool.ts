@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
 import { Type, type Static } from "typebox";
 import {
   defineTool,
@@ -196,6 +195,7 @@ interface CollectResultJson {
 interface SpawnResultJson {
   pane_id: string;
   tab_id: string;
+  prompt?: { sent: boolean };
 }
 
 interface WaitResultJson {
@@ -231,13 +231,6 @@ function childName(...candidates: (string | undefined)[]): string {
   return candidates.find((c) => c && c.length > 0) ?? "subagent";
 }
 
-/** Strip the <supervisor-agent> wrapper tags from a prompt body. */
-function stripSupervisorTag(body: string): string {
-  return body
-    .replace(/^<supervisor-agent>\s*/, "")
-    .replace(/\s*<\/supervisor-agent>\s*$/, "");
-}
-
 /**
  * Look up a child's label from the registry via `helper list`. Used by
  * commands whose own result carries no label (prompt, wait, close). Must be
@@ -258,7 +251,9 @@ async function resolveLabel(options: SubagentOptions): Promise<string | undefine
 
 /**
  * Format the helper's JSON output as a descriptive one-liner (or short block)
- * for each command. Pure — no I/O — so it is unit-tested directly.
+ * for each command. Pure — no I/O — so it is unit-tested directly. The result
+ * never echoes a prompt body: the tool-call arguments already carry it, and
+ * repeating it doubles the context cost of every delegation.
  */
 export function formatResult(
   command: SubagentCommand,
@@ -270,14 +265,12 @@ export function formatResult(
       const r = json as SpawnResultJson;
       const name = childName(options.label, options.agent);
       const ids = ` (pane_id ${r.pane_id}, tab_id ${r.tab_id})`;
-      if (!options.body) return `Started subagent ${name}${ids}`;
-      const body = stripSupervisorTag(options.body);
-      return `Started subagent ${name}${ids} and sent its prompt:\n${body}`;
+      if (r.prompt?.sent) return `Started subagent ${name}${ids} and sent its prompt`;
+      return `Started subagent ${name}${ids}`;
     }
     case "prompt": {
       const name = childName(options.label);
-      const body = stripSupervisorTag(options.body ?? "");
-      return `Sent prompt to subagent ${name}:\n${body}`;
+      return `Sent prompt to subagent ${name}`;
     }
     case "wait": {
       const r = json as WaitResultJson;
@@ -527,26 +520,10 @@ export const subagentTool: ToolDefinition<typeof subagentSchema, SubagentToolDet
 
     const argv = buildHelperArgs(command, options);
 
-    // A body_file needs its content for the result echo — the helper reads
-    // the file again for delivery. Only spawn and prompt carry a body.
-    let formatOptions = options;
-    if (
-      (command === "spawn" || command === "prompt") &&
-      options.body === undefined &&
-      options.body_file !== undefined
-    ) {
-      try {
-        formatOptions = { ...formatOptions, body: await readFile(options.body_file, "utf8") };
-      } catch (e) {
-        throw new Error(
-          `cannot read body_file ${options.body_file}: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    }
-
     // Resolve the child's label from the registry for commands that don't
     // carry it in options. Done before the main command so close — which
     // removes the registry entry — still finds the label.
+    let formatOptions = options;
     if (formatOptions.label === undefined && command !== "spawn" && command !== "list") {
       const label = await resolveLabel(formatOptions);
       if (label) formatOptions = { ...formatOptions, label };

@@ -220,20 +220,18 @@ describe("formatResult", () => {
     expect(text).toBe("Started subagent review (pane_id w1:p2, tab_id w1:t2)");
   });
 
-  it("spawn: with a body, reports the prompt it sent", () => {
+  it("spawn: with a body, reports that the prompt was sent without echoing it", () => {
     const text = formatResult(
       "spawn",
       { label: "review", body: "<supervisor-agent>do it</supervisor-agent>" },
       { pane_id: "w1:p2", tab_id: "w1:t2", prompt: { sent: true, status: "working" } },
     );
-    expect(text).toBe(
-      "Started subagent review (pane_id w1:p2, tab_id w1:t2) and sent its prompt:\ndo it",
-    );
+    expect(text).toBe("Started subagent review (pane_id w1:p2, tab_id w1:t2) and sent its prompt");
   });
 
-  it("prompt: uses the label and strips the supervisor-agent tag", () => {
+  it("prompt: uses the label and does not echo the body", () => {
     const text = formatResult("prompt", { pane_id: "w1", label: "review", body: "<supervisor-agent>do thing</supervisor-agent>" }, { pane_id: "w1", sent: true });
-    expect(text).toBe("Sent prompt to subagent review:\ndo thing");
+    expect(text).toBe("Sent prompt to subagent review");
   });
 
   it("wait: reports the state it returned on", () => {
@@ -423,7 +421,7 @@ describe("subagentTool.execute", () => {
     ).rejects.toThrow("`label` is required for `spawn`");
   });
 
-  it("prompt with body_file satisfies the body requirement and echoes the file content", async () => {
+  it("prompt with body_file satisfies the body requirement without echoing the file content", async () => {
     const bodyFile = join(tmpDir, "task.md");
     writeFileSync(bodyFile, "<supervisor-agent>do it from a file</supervisor-agent>");
     // The stub answers the label-resolution `list` call and the prompt call.
@@ -437,12 +435,10 @@ describe("subagentTool.execute", () => {
       undefined,
       {} as never,
     );
-    expect((result.content[0] as { text: string }).text).toBe(
-      "Sent prompt to subagent subagent:\ndo it from a file",
-    );
+    expect((result.content[0] as { text: string }).text).toBe("Sent prompt to subagent subagent");
   });
 
-  it("spawn with body_file reports the prompt it sent", async () => {
+  it("spawn with body_file reports that the prompt was sent without echoing it", async () => {
     const bodyFile = join(tmpDir, "task.md");
     writeFileSync(bodyFile, "<supervisor-agent>do it from a file</supervisor-agent>");
     pointAtStub(`echo '{\"pane_id\":\"w1\",\"tab_id\":\"t1\",\"prompt\":{\"sent\":true,\"status\":\"working\"}}'`);
@@ -454,11 +450,12 @@ describe("subagentTool.execute", () => {
       {} as never,
     );
     expect((result.content[0] as { text: string }).text).toBe(
-      "Started subagent task (pane_id w1, tab_id t1) and sent its prompt:\ndo it from a file",
+      "Started subagent task (pane_id w1, tab_id t1) and sent its prompt",
     );
   });
 
-  it("rejects an unreadable body_file without invoking the helper", async () => {
+  it("surfaces a helper failure for an unreadable body_file", async () => {
+    pointAtStub(`echo 'cannot read --body-file nope.md' >&2; exit 2`);
     await expect(
       subagentTool.execute(
         "call-1",
@@ -467,7 +464,7 @@ describe("subagentTool.execute", () => {
         undefined,
         {} as never,
       ),
-    ).rejects.toThrow(/cannot read body_file/);
+    ).rejects.toThrow(/Failed to prompt subagent/);
   });
 
   it("throws a descriptive error on helper failure", async () => {
