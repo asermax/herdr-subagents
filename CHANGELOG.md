@@ -1,3 +1,10 @@
+## [0.8.1](https://github.com/asermax/herdr-subagents/compare/v0.8.0...v0.8.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **extension:** make the subagent tool the only surface the pi model sees ([7f82de2](https://github.com/asermax/herdr-subagents/commit/7f82de2c38c31047eeb61176a40a0dd09a87f0a6))
+
 # [0.8.0](https://github.com/asermax/herdr-subagents/compare/v0.7.1...v0.8.0) (2026-09-13)
 
 
