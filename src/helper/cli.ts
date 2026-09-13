@@ -7,7 +7,7 @@ import { closeChild } from "./close.js";
 import { collectChild, waitChild, type CollectDeps } from "./collect.js";
 import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
-import { DEFAULT_PROMPT_BOUNDS, deliverPrompt } from "./prompt.js";
+import { DEFAULT_PROMPT_BOUNDS, ackDelivery, deliverPrompt } from "./prompt.js";
 import { fileRegistryStore, Registry } from "./registry.js";
 import { DEFAULT_SCREEN_LINES, readScreen } from "./screen.js";
 import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
@@ -30,6 +30,7 @@ const SPAWN_OWN_FLAGS = new Set([
   "agent",
   "label",
   "model",
+  "body",
   "cwd",
   "workspace",
   "worktree",
@@ -127,6 +128,7 @@ interface SpawnArgs {
   agent: string | undefined;
   label: string | undefined;
   model: string | undefined;
+  body: string | undefined;
   cwd: string;
   workspace: string | undefined;
   worktree: boolean | undefined;
@@ -169,8 +171,9 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
     : undefined;
 
   const { client, registry } = buildDeps();
+  let result: SpawnResult;
   try {
-    const result: SpawnResult = await spawnChild(
+    result = await spawnChild(
       {
         kind,
         agentName,
@@ -183,7 +186,6 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
       },
       { client, tracking: registry },
     );
-    emit(result);
   } catch (e) {
     emitError(e);
     // A `blocked` failure leaves a live child behind; saying "spawn failed"
@@ -192,6 +194,28 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
       fail(`spawn ${e.reason === "blocked" ? "blocked" : "failed"}: ${e.message}`);
     }
     fail(`spawn failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  if (args.body === undefined) {
+    emit(result);
+    return;
+  }
+
+  // The initial --body rides the spawn: delivered and acked exactly as a
+  // standalone `prompt` would, so a later `wait` sees the same baseline
+  // (ADR-0008). The body arrives already wrapped in <supervisor-agent>.
+  try {
+    const receipt = await deliverPrompt(client, result.pane_id, args.body, DEFAULT_PROMPT_BOUNDS);
+    await ackDelivery(registry, result.pane_id, receipt);
+    emit({ ...result, prompt: { sent: true, status: receipt.status } });
+  } catch (e) {
+    // The spawn succeeded; the child is live and tracked. A delivery failure
+    // must not read as a dead child — report the pane so the parent can retry
+    // with `prompt`.
+    const cause = e instanceof Error ? e.message : String(e);
+    const message = `the child ${result.pane_id} is alive but the prompt was not delivered (${cause}) — retry with 'helper prompt ${result.pane_id} --body <text>'`;
+    emitError({ reason: "delivery", message });
+    fail(`spawn ok, prompt not delivered: ${message}`);
   }
 }
 
@@ -210,14 +234,8 @@ async function runPrompt(args: PromptArgs): Promise<void> {
   try {
     const receipt = await deliverPrompt(client, paneId, body, DEFAULT_PROMPT_BOUNDS);
     // Ack the delivery so a `wait` armed after it knows which transitions are
-    // new — including one armed after the turn already ended (ADR-0008). Only a
-    // `working` receipt is acked as itself; the other cases ack the pre-send
-    // state, which the parent has already acted on.
-    await registry.setAcked(
-      paneId,
-      receipt.acked_seq,
-      receipt.status === "working" ? "working" : undefined,
-    );
+    // new — including one armed after the turn already ended (ADR-0008).
+    await ackDelivery(registry, paneId, receipt);
     emit({ pane_id: paneId, sent: true, status: receipt.status });
   } catch (e) {
     emitError(e);
@@ -361,6 +379,10 @@ const spawn = defineCommand({
     model: {
       type: "string",
       description: "Model the child's harness runs (a pi model id or claude alias)",
+    },
+    body: {
+      type: "string",
+      description: "Initial prompt, wrapped in <supervisor-agent>…</supervisor-agent>",
     },
     cwd: { type: "string", default: process.cwd(), description: "Child working directory" },
     workspace: { type: "string", description: "Workspace id" },

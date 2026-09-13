@@ -35,6 +35,24 @@ describe("buildHelperArgs", () => {
     ).toEqual(["spawn", "--kind", "pi", "--label", "fix", "--model", "sonnet"]);
   });
 
+  it("spawn: body rides after model", () => {
+    expect(
+      buildHelperArgs("spawn", {
+        kind: "pi",
+        label: "fix",
+        body: "<supervisor-agent>do it</supervisor-agent>",
+      }),
+    ).toEqual([
+      "spawn",
+      "--kind",
+      "pi",
+      "--label",
+      "fix",
+      "--body",
+      "<supervisor-agent>do it</supervisor-agent>",
+    ]);
+  });
+
   it("spawn: worktree flags ride along, and only with --worktree", () => {
     expect(
       buildHelperArgs("spawn", {
@@ -181,6 +199,15 @@ describe("formatResult", () => {
     expect(text).toBe("Started subagent review");
   });
 
+  it("spawn: with a body, reports the prompt it sent", () => {
+    const text = formatResult(
+      "spawn",
+      { label: "review", body: "<supervisor-agent>do it</supervisor-agent>" },
+      { pane_id: "w1:p2", tab_id: "w1:t2", prompt: { sent: true, status: "working" } },
+    );
+    expect(text).toBe("Started subagent review and sent its prompt:\ndo it");
+  });
+
   it("prompt: uses the label and strips the supervisor-agent tag", () => {
     const text = formatResult("prompt", { pane_id: "w1", label: "review", body: "<supervisor-agent>do thing</supervisor-agent>" }, { pane_id: "w1", sent: true });
     expect(text).toBe("Sent prompt to subagent review:\ndo thing");
@@ -267,6 +294,18 @@ describe("formatError", () => {
   it("extracts the message from helper error JSON", () => {
     const msg = formatError("spawn", { label: "x" }, { reason: "timeout", message: "never ready" }, "");
     expect(msg).toBe("Failed to spawn subagent x: never ready");
+  });
+
+  it("spawn delivery failure: the child is live, not a failed spawn", () => {
+    const msg = formatError(
+      "spawn",
+      { label: "x" },
+      { reason: "delivery", message: "the child w1:p2 is alive but the prompt was not delivered" },
+      "",
+    );
+    expect(msg).toBe(
+      "Subagent x spawned but its prompt was not delivered: the child w1:p2 is alive but the prompt was not delivered",
+    );
   });
 
   it("falls back to stderr when no JSON is present", () => {

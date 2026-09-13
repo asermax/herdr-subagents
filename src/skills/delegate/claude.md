@@ -1,4 +1,4 @@
-After you prompt a child, arm the wake by launching `{{helper}} wait <pane_id>` as a background task. Claude does not auto-wake you on a child's completion — the background task's completion reminder is what brings you back. Re-arm it each time you prompt, including when you reply to a `<subagent-ask>`, and after every wake below.
+After you prompt a child, arm the wake by launching `{{helper}} wait <pane_id>` as a background task. Claude does not auto-wake you on a child's completion — the background task's completion reminder is what brings you back. A `spawn` with `--body` counts as prompting. Re-arm it each time you prompt, including when you reply to a `<subagent-ask>`, and after every wake below.
 
 `wait` reports what to do next and never fails silently:
 

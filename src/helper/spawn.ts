@@ -7,8 +7,8 @@ import { readScreen } from "./screen.js";
 // evidence a child is spawned and addressable. One observed failure drives
 // the repair step:
 //   - agent name lost on 2 of 4 spawns -> verify-and-rename
-// Prompt delivery verification lives in prompt.ts (the delegate skill's
-// spawn/prompt split): spawn only creates + starts a child.
+// Prompt delivery verification lives in prompt.ts: spawnChild only creates +
+// starts a child (cli.ts composes the two when spawn is given --body).
 
 const GATE = "HERDR_SUBAGENT";
 

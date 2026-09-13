@@ -26,15 +26,6 @@ describe("passthroughArgs forwards unknown flags", () => {
   });
 });
 
-describe("passthroughArgs forwards spawn --body to the child", () => {
-  it("forwards --body since spawn no longer owns it", () => {
-    // spawn dropped --body (the delegate skill's spawn/prompt split): a stray
-    // --body now rides passthrough to the child's harness.
-    const out = passthroughArgs(["--kind", "pi", "--label", "x", "--body", "x"]);
-    expect(out).toEqual(["--body", "x"]);
-  });
-});
-
 describe("passthroughArgs skips spawn's own flags", () => {
   it("drops each own flag and its value", () => {
     const out = passthroughArgs([
@@ -42,6 +33,7 @@ describe("passthroughArgs skips spawn's own flags", () => {
       "--agent", "doer",
       "--label", "do it",
       "--model", "sonnet",
+      "--body", "do it",
       "--cwd", "/repo",
       "--workspace", "w1Z",
     ]);

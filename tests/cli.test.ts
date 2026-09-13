@@ -1,9 +1,10 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildSync } from "esbuild";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { StubHerdrServer, type ScriptedEvent } from "./stub-server.js";
 
 // Black-box CLI process tests. These spawn the compiled helper entrypoint and
 // assert on stdout/exit code — the highest seam. They cover the boundary guards
@@ -165,6 +166,147 @@ describe("CLI help surface", () => {
     expect(stderr).toMatch(/read/);
     expect(stderr).toMatch(/unblock/);
     expect(stderr).toMatch(/watch/);
+  });
+});
+
+// --- spawn --body: the initial prompt rides the spawn --------------------
+//
+// The helper shells out to HERDR_BIN for every CLI operation, so a stub
+// binary answering with herdr's JSON-RPC envelope drives the whole sequence:
+// tab create, agent start, agent get, agent prompt. A state file scripts it —
+// what agent.get reports, whether agent prompt refuses, where delivered
+// bodies are logged. Delivery verification stays on the socket, served by
+// StubHerdrServer, so the full spawn→deliver→ack path runs end to end.
+describe("CLI spawn --body", () => {
+  let server: StubHerdrServer;
+  let tmpDir: string;
+  let stubEnv: NodeJS.ProcessEnv;
+
+  function writeState(state: Record<string, unknown>): void {
+    writeFileSync(join(tmpDir, "state.json"), JSON.stringify(state));
+  }
+
+  function readRegistry(): Record<string, { acked_seq?: number; acked_status?: string }> {
+    return JSON.parse(readFileSync(join(tmpDir, "registry.json"), "utf8"));
+  }
+
+  function readEntry(): { acked_seq?: number; acked_status?: string } {
+    const entry = readRegistry()["wS:p1"];
+    if (entry === undefined) throw new Error("no registry entry for wS:p1");
+    return entry;
+  }
+
+  function writeHerdrStub(): string {
+    const bin = join(tmpDir, "herdr-stub.mjs");
+    writeFileSync(
+      bin,
+      [
+        "#!/usr/bin/env node",
+        "import { appendFileSync, readFileSync } from 'node:fs';",
+        "const [cmd, sub, target, body] = process.argv.slice(2);",
+        "const state = JSON.parse(readFileSync(process.env.STUB_STATE, 'utf8'));",
+        "const ok = (result) => { console.log(JSON.stringify({ id: 1, result })); process.exit(0); };",
+        "if (cmd === 'tab' && sub === 'create') ok({ root_pane: { pane_id: 'wS:p1', tab_id: 'wS:t1', workspace_id: 'wS' } });",
+        "if (cmd === 'agent' && sub === 'start') ok({ agent: { pane_id: 'wS:p1', tab_id: 'wS:t1', workspace_id: 'wS', name: target, agent: 'pi', agent_status: 'idle', state_change_seq: 5 } });",
+        "if (cmd === 'agent' && sub === 'get') ok({ agent: { pane_id: 'wS:p1', tab_id: 'wS:t1', workspace_id: 'wS', name: 'doer', agent: 'pi', agent_status: state.getStatus, state_change_seq: state.seq } });",
+        "if (cmd === 'agent' && sub === 'prompt') {",
+        "  if (state.promptFails) { process.stderr.write(JSON.stringify({ id: 1, error: { code: 'prompt_failed', message: 'herdr refused' } })); process.exit(1); }",
+        "  appendFileSync(state.log, body + '\\n');",
+        "}",
+        "ok({});",
+      ].join("\n"),
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  }
+
+  beforeEach(async () => {
+    server = new StubHerdrServer();
+    await server.start();
+    tmpDir = mkdtempSync(join(tmpdir(), "herdr-spawn-body-"));
+    const logPath = join(tmpDir, "prompts.log");
+    writeState({ getStatus: "working", seq: 6, promptFails: false, log: logPath });
+    stubEnv = {
+      HERDR_BIN: writeHerdrStub(),
+      HERDR_SOCKET_PATH: server.socketPath,
+      HERDR_WORKSPACE_ID: "wS",
+      HERDR_REGISTRY_PATH: join(tmpDir, "registry.json"),
+      STUB_STATE: join(tmpDir, "state.json"),
+    };
+  });
+
+  afterEach(async () => {
+    await server.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("delivers the initial prompt with the spawn and acks it", async () => {
+    // The delivery event must be newer than the agent.get seq (6) so the
+    // client's stale filter does not drop it.
+    server.script([{ paneId: "wS:p1", status: "working", seq: 7 } as ScriptedEvent]);
+    const { code, stdout, stderr } = await runCli(
+      [
+        "spawn",
+        "--kind",
+        "pi",
+        "--agent",
+        "doer",
+        "--label",
+        "x",
+        "--body",
+        "<supervisor-agent>do it</supervisor-agent>",
+      ],
+      stubEnv,
+    );
+    expect(code).toBe(0);
+    expect(stderr).toBe("");
+    const result = JSON.parse(stdout.trim());
+    expect(result.pane_id).toBe("wS:p1");
+    expect(result.tab_id).toBe("wS:t1");
+    expect(result.prompt).toEqual({ sent: true, status: "working" });
+    expect(readFileSync(join(tmpDir, "prompts.log"), "utf8")).toBe(
+      "<supervisor-agent>do it</supervisor-agent>\n",
+    );
+    const entry = readEntry();
+    expect(entry.acked_seq).toBe(6);
+    expect(entry.acked_status).toBe("working");
+  });
+
+  it("spawn without --body emits the plain spawn result", async () => {
+    const { code, stdout } = await runCli(
+      ["spawn", "--kind", "pi", "--agent", "doer", "--label", "x"],
+      stubEnv,
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.trim())).toEqual({ pane_id: "wS:p1", tab_id: "wS:t1" });
+    // No prompt delivered, so nothing was acked.
+    expect(readEntry().acked_seq).toBeUndefined();
+  });
+
+  it("a delivery failure keeps the live child and names the pane to retry", async () => {
+    writeState({ getStatus: "working", seq: 6, promptFails: true, log: join(tmpDir, "prompts.log") });
+    const { code, stdout, stderr } = await runCli(
+      [
+        "spawn",
+        "--kind",
+        "pi",
+        "--agent",
+        "doer",
+        "--label",
+        "x",
+        "--body",
+        "<supervisor-agent>do it</supervisor-agent>",
+      ],
+      stubEnv,
+    );
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/alive but the prompt was not delivered/);
+    expect(stderr).toMatch(/helper prompt wS:p1 --body/);
+    expect(JSON.parse(stdout.trim())).toMatchObject({ reason: "delivery" });
+    // The child is live and stays tracked, unacked.
+    const entry = readEntry();
+    expect(entry).toBeTruthy();
+    expect(entry.acked_seq).toBeUndefined();
   });
 });
 

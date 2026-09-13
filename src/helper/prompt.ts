@@ -86,6 +86,22 @@ function receipt(beforeSeq: number, delivered: AgentSnapshot): PromptReceipt {
   };
 }
 
+// Ack a delivery receipt on behalf of the caller. Only a `working` receipt is
+// acked as itself; the other cases ack the pre-send state, which the parent
+// has already acted on (ADR-0008). Shared by `prompt` and a `spawn --body`,
+// which deliver through the same verify-and-resend path.
+export async function ackDelivery(
+  registry: { setAcked(paneId: string, seq: number, status?: AgentStatus): Promise<void> },
+  paneId: string,
+  receipt: PromptReceipt,
+): Promise<void> {
+  await registry.setAcked(
+    paneId,
+    receipt.acked_seq,
+    receipt.status === "working" ? "working" : undefined,
+  );
+}
+
 // Watch for working|blocked|done after the prompt. `fromSeq` skips a stale
 // replay of the pre-prompt state. A `done` here is fine: a fast turn passed
 // working->done and that is still evidence of delivery.

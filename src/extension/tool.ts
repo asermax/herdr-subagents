@@ -64,6 +64,12 @@ const subagentSchema = Type.Object({
         description: "Model the child's harness runs; omitted, the harness default (spawn only)",
       }),
     ),
+    body: Type.Optional(
+      Type.String({
+        description:
+          "Prompt body wrapped in <supervisor-agent> — the initial prompt on spawn, the message on prompt",
+      }),
+    ),
     worktree: Type.Optional(
       Type.Boolean({ description: "Give the child its own git worktree (spawn only)" }),
     ),
@@ -75,7 +81,6 @@ const subagentSchema = Type.Object({
     ),
     pane_id: Type.Optional(Type.String({ description: "Pane id" })),
     tab_id: Type.Optional(Type.String({ description: "Tab id" })),
-    body: Type.Optional(Type.String({ description: "Prompt body (wrap in <supervisor-agent>)" })),
     timeout: Type.Optional(Type.Number({ description: "Timeout in ms (wait only)" })),
     keys: Type.Optional(
       Type.String({ description: 'Space-separated key names, e.g. "1 enter" (unblock only)' }),
@@ -98,7 +103,7 @@ export interface SubagentToolDetails {
  *
  * | command  | argv                                                    |
  * | -------- | ------------------------------------------------------- |
- * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--model <model>] [--worktree [--branch <b>] [--base <r>]]` |
+ * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--model <model>] [--body <body>] [--worktree [--branch <b>] [--base <r>]]` |
  * | prompt   | `prompt <pane_id> --body <body>`                        |
  * | wait     | `wait <pane_id> [--timeout <ms>]`                       |
  * | collect  | `collect <pane_id>`                                     |
@@ -115,6 +120,7 @@ export function buildHelperArgs(command: SubagentCommand, options: SubagentOptio
       if (options.agent) args.push("--agent", options.agent);
       if (options.label) args.push("--label", options.label);
       if (options.model) args.push("--model", options.model);
+      if (options.body) args.push("--body", options.body);
       if (options.worktree) {
         args.push("--worktree");
         if (options.branch) args.push("--branch", options.branch);
@@ -240,7 +246,9 @@ export function formatResult(
   switch (command) {
     case "spawn": {
       const name = childName(options.label, options.agent);
-      return `Started subagent ${name}`;
+      if (!options.body) return `Started subagent ${name}`;
+      const body = stripSupervisorTag(options.body);
+      return `Started subagent ${name} and sent its prompt:\n${body}`;
     }
     case "prompt": {
       const name = childName(options.label);
@@ -297,8 +305,19 @@ export function formatError(
   stderr: string,
 ): string {
   const detail = errorMessage(json) || stderr.trim() || "helper exited with an error";
+  // A spawn with a body can fail at delivery: the child is live and tracked,
+  // so "failed to spawn" would misread as a dead child.
+  if (command === "spawn" && failureReason(json) === "delivery") {
+    return `Subagent ${childName(options.label, options.agent)} spawned but its prompt was not delivered: ${detail}`;
+  }
   const target = commandTarget(command, options);
   return `Failed to ${command} ${target}: ${detail}`;
+}
+
+function failureReason(json: unknown | undefined): string | undefined {
+  if (typeof json !== "object" || json === null) return undefined;
+  const reason = (json as Record<string, unknown>)["reason"];
+  return typeof reason === "string" ? reason : undefined;
 }
 
 function errorMessage(json: unknown | undefined): string | undefined {
@@ -408,8 +427,8 @@ const PROMPT_SNIPPET =
 
 const PROMPT_GUIDELINES: string[] = [
   "Use `subagent` to delegate separable work to a child agent running in its own herdr tab — one tab, one task.",
-  "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. Returns `{ pane_id, tab_id }` — keep both.",
-  "`prompt`: options `{ pane_id: string, body: string }`. Wrap the body in `<supervisor-agent>…</supervisor-agent>` so the child knows it is a supervisor directive.",
+  "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string, body?: string, worktree?: boolean, branch?: string, base?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. Pass `body` (wrapped in `<supervisor-agent>…</supervisor-agent>`) to send the task in the same call. Returns `{ pane_id, tab_id }` — keep both.",
+  "`prompt`: options `{ pane_id: string, body: string }`. Follow-up prompts to a spawned child. Wrap the body in `<supervisor-agent>…</supervisor-agent>` so the child knows it is a supervisor directive.",
   "`collect`: options `{ pane_id: string }`. Returns the child's last message as a descriptive summary including status, message, and whether the child is asking a question (`ask`). A question means reply, do not close.",
   "`close`: options `{ tab_id: string }`. Close a child once you have its result and no longer need it.",
   "`list`: no options. Shows every tracked child and its status — the durable backstop for a missed wake.",
