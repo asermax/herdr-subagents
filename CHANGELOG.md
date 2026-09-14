@@ -1,3 +1,11 @@
+## [0.9.3](https://github.com/asermax/herdr-subagents/compare/v0.9.2...v0.9.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **helper:** close the watch's blind spots for child closure ([3282294](https://github.com/asermax/herdr-subagents/commit/3282294d659d0824ee7605b03298e4860e2db9e4))
+* **helper:** guard the registry against concurrent helper processes ([b9c7e19](https://github.com/asermax/herdr-subagents/commit/b9c7e19a22d48ee07f23a252fbd69fa58ae30e60))
+
 ## [0.9.2](https://github.com/asermax/herdr-subagents/compare/v0.9.1...v0.9.2) (2026-09-13)
 
 
