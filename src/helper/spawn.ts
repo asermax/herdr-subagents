@@ -230,6 +230,7 @@ export async function spawnChild(
         kind: input.kind,
         agent_name: effectiveAgent,
         status: "idle",
+        spawned_at: Date.now(),
         ...(resolved ? { worktree: toChildWorktree(resolved) } : {}),
       });
     } catch {

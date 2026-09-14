@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +31,10 @@ export interface RegistryEntry {
   // Set when the child was spawned into a git worktree. `close` reads it to
   // decide whether this child is the last one out of the checkout.
   worktree?: { path: string; branch?: string };
+  // Wall-clock spawn time. A freshly-spawned child briefly answers
+  // `agent_not_found` while its harness boots (no agent detected yet), so `list`
+  // must not read that as a dead pane and prune it.
+  spawned_at?: number;
 }
 
 export interface ListedChild extends RegistryEntry {
@@ -42,10 +46,79 @@ export interface ListedChild extends RegistryEntry {
 export interface RegistryStore {
   read(): Promise<Record<string, RegistryEntry>>;
   write(entries: Record<string, RegistryEntry>): Promise<void>;
+  // Serializes a read-modify-write span against OTHER PROCESSES sharing the
+  // same backing file. The parent runs helper processes concurrently (pi
+  // executes tool calls in parallel), and without this two spawns can each
+  // read the same snapshot and the second write loses the first child.
+  // Absent on in-memory stores — nothing contends.
+  withLock?<T>(run: () => Promise<T>): Promise<T>;
+}
+
+// Lock parameters. The wait is bounded: a lock held past the deadline runs the
+// operation anyway (best-effort, matching the spawn path's tolerance — a
+// registry hiccup must not fail a spawn). Stale takeover covers a holder that
+// died between create and unlink.
+const LOCK_WAIT_MS = 10_000;
+const LOCK_STALE_MS = 10_000;
+const LOCK_RETRY_MS = 25;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function withFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    let fd: number | undefined;
+    try {
+      fd = openSync(lockPath, "wx");
+    } catch {
+      fd = undefined;
+    }
+    if (fd !== undefined) {
+      try {
+        return await run();
+      } finally {
+        try {
+          closeSync(fd);
+        } catch {
+          // already closed
+        }
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // already gone
+        }
+      }
+    }
+
+    // Taken. Steal it if the holder is long dead, else wait and retry.
+    let stolen = false;
+    try {
+      const st = statSync(lockPath);
+      if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+        unlinkSync(lockPath);
+        stolen = true;
+      }
+    } catch {
+      // unreadable — the next acquire attempt is the answer
+    }
+    if (!stolen) {
+      if (Date.now() > deadline) return run();
+      await sleep(LOCK_RETRY_MS);
+    }
+  }
+}
+
+// Readers of the registry include other processes (the watch); rename makes
+// each write appear atomically — a reader never sees a truncated file.
+function atomicWrite(file: string, data: string): void {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, file);
 }
 
 export function fileRegistryStore(path?: string): RegistryStore {
   const file = path ?? defaultRegistryPath();
+  const lockPath = `${file}.lock`;
   return {
     async read() {
       if (!existsSync(file)) return {};
@@ -58,7 +131,10 @@ export function fileRegistryStore(path?: string): RegistryStore {
     },
     async write(entries) {
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, JSON.stringify(entries, null, 2));
+      atomicWrite(file, JSON.stringify(entries, null, 2));
+    },
+    withLock(run) {
+      return withFileLock(lockPath, run);
     },
   };
 }
@@ -69,6 +145,11 @@ function defaultRegistryPath(): string {
   const parentPane = process.env.HERDR_PANE_ID ?? "orphan";
   return join(homedir(), ".cache", "herdr-subagents", "registry", `${parentPane}.json`);
 }
+
+// How long after spawn a child may answer `agent_not_found` without `list`
+// reading it as a dead pane: a booting harness is undetected for a few
+// seconds, and the probe cannot tell that apart from a gone pane.
+const SPAWN_GRACE_MS = 60_000;
 
 export class Registry {
   constructor(
@@ -91,8 +172,15 @@ export class Registry {
     return result;
   }
 
+  // The whole read-modify-write runs under the store's cross-process lock when
+  // it has one; `serialized` alone cannot help — pi executes tool calls in
+  // parallel, so two helper processes mutate the same file concurrently.
+  private critical<T>(run: () => Promise<T>): Promise<T> {
+    return this.serialized(() => (this.store.withLock ?? passthrough)(run));
+  }
+
   async add(entry: RegistryEntry): Promise<void> {
-    return this.serialized(async () => {
+    return this.critical(async () => {
       const entries = await this.store.read();
       entries[entry.pane_id] = entry;
       await this.store.write(entries);
@@ -105,7 +193,7 @@ export class Registry {
   }
 
   async setStatus(paneId: string, status: AgentStatus): Promise<void> {
-    return this.serialized(async () => {
+    return this.critical(async () => {
       const entries = await this.store.read();
       if (entries[paneId]) {
         entries[paneId].status = status;
@@ -115,7 +203,7 @@ export class Registry {
   }
 
   async setAcked(paneId: string, seq: number, status?: AgentStatus): Promise<void> {
-    return this.serialized(async () => {
+    return this.critical(async () => {
       const entries = await this.store.read();
       const entry = entries[paneId];
       if (entry) {
@@ -128,7 +216,7 @@ export class Registry {
   }
 
   async remove(paneId: string): Promise<void> {
-    return this.serialized(async () => {
+    return this.critical(async () => {
       const entries = await this.store.read();
       delete entries[paneId];
       await this.store.write(entries);
@@ -138,7 +226,9 @@ export class Registry {
   // Lists every tracked child. Each entry is probed against herdr: if the pane
   // no longer resolves, the entry is marked stale and pruned from the store so
   // closed children don't accumulate and waste probe subprocesses on every
-  // future list/close.
+  // future list/close. A child inside its spawn grace window is kept even on a
+  // null probe — a booting harness answers `agent_not_found` for a few
+  // seconds, and pruning it would orphan a live child.
   async list(): Promise<ListedChild[]> {
     const entries = await this.store.read();
     const result: ListedChild[] = [];
@@ -146,6 +236,10 @@ export class Registry {
     for (const entry of Object.values(entries)) {
       const snap = await this.probe(entry.pane_id);
       if (snap === null) {
+        if (entry.spawned_at !== undefined && Date.now() - entry.spawned_at < SPAWN_GRACE_MS) {
+          result.push({ ...entry, stale: false });
+          continue;
+        }
         result.push({ ...entry, stale: true });
         stale.push(entry.pane_id);
       } else {
@@ -153,7 +247,7 @@ export class Registry {
       }
     }
     if (stale.length > 0) {
-      await this.serialized(async () => {
+      await this.critical(async () => {
         const current = await this.store.read();
         for (const paneId of stale) delete current[paneId];
         await this.store.write(current);
@@ -161,4 +255,8 @@ export class Registry {
     }
     return result;
   }
+}
+
+async function passthrough<T>(run: () => Promise<T>): Promise<T> {
+  return run();
 }

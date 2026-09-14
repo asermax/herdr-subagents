@@ -791,3 +791,75 @@ describe("registry serialization", () => {
     expect(maxActive()).toBe(1);
   });
 });
+
+// --- registry cross-process locking (parallel helper processes) ----------
+
+describe("registry cross-process locking", () => {
+  // pi executes tool calls in parallel, so two `subagent spawn`s run two
+  // helper processes against the same registry file. Each Registry instance
+  // serializes only within its own process — the file lock is what spans
+  // processes. Two instances over one store model the two processes.
+  it("does not lose concurrent adds from two registries sharing one file", async () => {
+    const a = new Registry(fileRegistryStore(registryPath), async () => null);
+    const b = new Registry(fileRegistryStore(registryPath), async () => null);
+
+    await Promise.all([a.add(makeRegistryEntry("w1Z:p1")), b.add(makeRegistryEntry("w1Z:p2"))]);
+
+    const store = fileRegistryStore(registryPath);
+    expect(Object.keys(await store.read()).sort()).toEqual(["w1Z:p1", "w1Z:p2"]);
+  });
+
+  it("serializes a remove against a concurrent add from another registry", async () => {
+    const a = new Registry(fileRegistryStore(registryPath), async () => null);
+    const b = new Registry(fileRegistryStore(registryPath), async () => null);
+    await a.add(makeRegistryEntry("w1Z:p1"));
+
+    await Promise.all([b.add(makeRegistryEntry("w1Z:p2")), a.remove("w1Z:p1")]);
+
+    const store = fileRegistryStore(registryPath);
+    expect(Object.keys(await store.read())).toEqual(["w1Z:p2"]);
+  });
+});
+
+// --- list: the spawn grace window ---------------------------------------
+
+describe("registry list spawn grace", () => {
+  // A booting child's harness is not detected yet, so the probe answers
+  // agent_not_found exactly like a gone pane. Pruning on it orphaned live
+  // children — the subagent tool calls `list` (resolveLabel) before every
+  // command, so the window was hit in practice.
+  it("keeps a booting child (fresh spawn, null probe) and does not prune it", async () => {
+    const registry = new Registry(fileRegistryStore(registryPath), async () => null);
+    await registry.add({ ...makeRegistryEntry("w1Z:p1"), spawned_at: Date.now() });
+
+    const children = await registry.list();
+
+    expect(children).toHaveLength(1);
+    expect(children[0]!.stale).toBe(false);
+    expect(Object.keys(await fileRegistryStore(registryPath).read())).toEqual(["w1Z:p1"]);
+  });
+
+  it("prunes a child past the grace window whose pane does not resolve", async () => {
+    const registry = new Registry(fileRegistryStore(registryPath), async () => null);
+    await registry.add({
+      ...makeRegistryEntry("w1Z:p1"),
+      spawned_at: Date.now() - 120_000,
+    });
+
+    const children = await registry.list();
+
+    expect(children[0]!.stale).toBe(true);
+    expect(Object.keys(await fileRegistryStore(registryPath).read())).toEqual([]);
+  });
+
+  it("prunes an entry with no spawn timestamp whose pane does not resolve", async () => {
+    // Entries written before the timestamp existed keep the old behavior.
+    const registry = new Registry(fileRegistryStore(registryPath), async () => null);
+    await registry.add(makeRegistryEntry("w1Z:p1"));
+
+    const children = await registry.list();
+
+    expect(children[0]!.stale).toBe(true);
+    expect(Object.keys(await fileRegistryStore(registryPath).read())).toEqual([]);
+  });
+});
