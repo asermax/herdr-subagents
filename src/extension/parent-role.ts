@@ -209,18 +209,37 @@ export function registerParentRole(pi: ExtensionAPI): () => void {
   let child: WatchProcess | null = null;
   let buffer = "";
   let stopped = false;
+  let restartTimer: NodeJS.Timeout | null = null;
+
+  // A dead watcher clears the tracked set: the restarted watch re-seeds the
+  // live children from the registry, and anything that closed while the
+  // watcher was down must not linger on the widget.
+  const resetState = () => {
+    state.children.clear();
+    ui?.setWidget(STATUS_KEY, undefined);
+  };
+
+  const scheduleRestart = () => {
+    if (stopped || restartTimer) return;
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      start();
+    }, 2000);
+  };
 
   const start = () => {
     if (stopped || child) return;
     try {
       child = spawnWatch();
     } catch {
-      // A spawn failure must not crash the session. The wake's durable
-      // backstop is `helper list` — the parent never loses a child.
+      // A spawn failure must not crash the session — retry shortly. The wake's
+      // durable backstop is `helper list` — the parent never loses a child.
       child = null;
+      scheduleRestart();
       return;
     }
 
+    buffer = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       buffer += chunk;
@@ -234,12 +253,17 @@ export function registerParentRole(pi: ExtensionAPI): () => void {
     });
     // Errors/exit are swallowed: watch is best-effort telemetry. The registry
     // and `helper list` are the durable record; a dead watcher loses the live
-    // status line but never loses a child.
+    // status line but never loses a child. It IS restarted, though — a single
+    // transient failure must not silence the widget for the whole session.
     child.on("error", () => {
       child = null;
+      resetState();
+      scheduleRestart();
     });
     child.on("exit", () => {
       child = null;
+      resetState();
+      scheduleRestart();
     });
   };
 
@@ -252,6 +276,8 @@ export function registerParentRole(pi: ExtensionAPI): () => void {
 
   const stop = () => {
     stopped = true;
+    if (restartTimer) clearTimeout(restartTimer);
+    restartTimer = null;
     const c = child;
     child = null;
     if (c) {

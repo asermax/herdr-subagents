@@ -161,6 +161,46 @@ export class StubHerdrServer {
     }
   }
 
+  // Broadcast worktree_removed + workspace_closed for a workspace — exactly
+  // what real herdr emits on `worktree remove` (verified 0.9.0: NO tab_closed
+  // per tab). Both events carry data.workspace.workspace_id.
+  pushWorkspaceDisposed(workspaceId: string): void {
+    for (const socket of this.sockets) {
+      const state = this.connState.get(socket);
+      if (!state) continue;
+      if (!state.watched.has("worktree.removed") && !state.watched.has("workspace.closed")) {
+        continue;
+      }
+      if (!this.sockets.has(socket)) continue;
+      const workspace = { workspace_id: workspaceId, label: workspaceId, tab_count: 1 };
+      socket.write(
+        JSON.stringify({ event: "worktree_removed", data: { workspace, type: "worktree_removed" } }) + "\n",
+      );
+      socket.write(
+        JSON.stringify({ event: "workspace_closed", data: { workspace, type: "workspace_closed" } }) + "\n",
+      );
+    }
+  }
+
+  // Reply to every fleet-shaped subscription (a subscription with a dot in its
+  // key, i.e. not a pane-scoped one) with an error envelope while keeping the
+  // connection open — the shape herdr answers with when a subscribe batch is
+  // invalid. Models a silently event-less fleet socket.
+  rejectFleetSubscriptions(): void {
+    for (const socket of [...this.sockets]) {
+      const state = this.connState.get(socket);
+      if (!state) continue;
+      const fleet = [...state.watched].some((t) => t.includes("."));
+      if (!fleet) continue;
+      socket.write(
+        JSON.stringify({
+          id: "fleet",
+          error: { code: "invalid_request", message: "invalid subscription" },
+        }) + "\n",
+      );
+    }
+  }
+
   // Destroy every connection currently subscribed to a pane (scoped or via a
   // pane.agent_status_changed subscription for that pane_id). Models a pane
   // going away mid-stream: herdr closes its subscription socket so the watch

@@ -1,6 +1,6 @@
 # Watch is event-driven, not polled
 
-`helper watch` streams child-status changes from herdr event subscriptions — a per-pane `pane.agent_status_changed` socket for status, a shared `pane.created` subscription for discovery, and a shared `tab.closed` subscription for closure — and emits one JSON line per change. It does not poll. This replaces the 2s `agent.get` poll loop added in `ee969c9`, which itself replaced an earlier event-driven watch that crashed on real herdr.
+`helper watch` streams child-status changes from herdr event subscriptions — a per-pane `pane.agent_status_changed` socket for status, a shared `pane.created` subscription for discovery, and shared `tab.closed` / `worktree.removed` / `workspace.closed` subscriptions for closure — and emits one JSON line per change. It does not poll. This replaces the 2s `agent.get` poll loop added in `ee969c9`, which itself replaced an earlier event-driven watch that crashed on real herdr.
 
 That earlier watch multiplexed many `events.subscribe` calls on one connection. herdr allows only one subscribe per connection (any other request resets it), and one stale pane in a multi-pane subscribe fails the whole batch — so the first stale registry entry killed the entire fleet stream on startup. The poll was a robust regression, not a design choice.
 
@@ -11,8 +11,10 @@ Verified against herdr 0.8.0; these behaviors shape the design:
 - **One connection per child**, one `pane.agent_status_changed` subscribe each. A stale/gone pane resets only its own (never-acked) connection; the rest of the fleet stream survives.
 - **The baseline status uses a separate one-shot `agent.get`**, not the subscription socket — any other request on a subscription socket resets it.
 - **Closure comes from `tab.closed`** (emitted as `tab_closed`, carries `tab_id`), correlated against the registry: child already removed → `closed`; still tracked → `gone`. Closing a tab does NOT close the status socket and does NOT emit `pane.closed` / `pane.exited` — only `tab.closed`.
+- **Worktree disposal emits no `tab.closed`.** `worktree remove` (the last-child-out close path, ADR-0009) disposes the checkout, the workspace, and every tab in it, emitting `worktree_removed` + `workspace_closed` only (verified against herdr 0.9.0). Those two events are closure signals of their own, correlated by `workspace_id` against the tracked children through the same closed/gone decision as `tab_closed`.
 - **A dead harness whose tab stays open** surfaces on the status subscription as `unknown`; the parent-role consumer normalizes `unknown → gone`. No liveness probe is needed.
-- **Discovery comes from `pane.created`** (emitted as `pane_created`). spawn writes the registry right after `tabCreate` (before `agentStart`), so a debounced reconcile on `pane_created` finds the child already tracked.
+- **A pane that stops resolving entirely** (herdr restart renumbers pane ids) answers a resubscribe with `pane_not_found`. On a sub that was live this is a genuine loss: the watch disposes the child (`gone`/`closed` by the registry) instead of dying silently — a silent death would stick the child on the fleet line forever.
+- **Discovery comes from `pane.created`** (emitted as `pane_created`). spawn writes the registry right after `tabCreate` (before `agentStart`), so a debounced reconcile on `pane_created` finds the child already tracked; measured against live herdr, the event also trails the `tab.create` response by ~80ms, keeping the write comfortably ahead of the reconcile read.
 
 `helper close` removes the registry entry before closing the tab, so the `tab_closed` correlate reads `closed` deterministically (no spurious wake).
 
@@ -21,10 +23,12 @@ Verified against herdr 0.8.0; these behaviors shape the design:
 - **Poll `agent.get` (the `ee969c9` design).** Robust, but adds up to one poll interval of latency to every status change and, critically, to the terminal-state wake. Rejected: events give instant status and instant wakes.
 - **Multiplex subscribes on one connection (the pre-`ee969c9` design).** Rejected: one stale pane kills the whole stream.
 - **Event-driven status plus a periodic liveness probe for closure.** Considered when closure events looked absent; rejected once `tab.closed` (and `unknown` for dead-panes) were verified — no probe is needed.
+- **Inferring closure from a dying status socket alone.** Rejected: a socket drop is ambiguous (transport blip vs pane gone). Closure is decided from closure events and the registry; the socket drop only re-arms the subscription. The one exception is `pane_not_found` on resubscribe — the pane's absence is server-confirmed, not inferred.
 
 ## Consequences
 
 - Status changes and terminal-state wakes reach the parent with ~instant latency instead of up to one poll interval.
-- One socket per child plus one fleet socket; a slow safety reconcile (default 30s) reopens any subscription lost to a transient socket drop or a missed `pane.created`. It is a discovery backstop, not a status or liveness poll.
+- One socket per child plus one fleet socket; a slow safety reconcile (default 30s) reopens any subscription lost to a transient socket drop or a missed `pane.created`. It is a discovery backstop, not a status or liveness poll — and a closure backstop: a sub whose child left the registry (the deliberate-close contract) is pruned with a `closed` line, so a missed closure event (a fleet reconnect window, worktree disposal before the workspace signals were handled) costs at most one reconcile interval of stale fleet line instead of forever.
+- Reconciles are serialized and skip pruning when the registry read fails — two overlapping reconciles could otherwise prune a sub the other just opened, and a bad read must never read as an empty fleet.
 - `pane.created`, `tab.closed`, and `pane.exited` each replay a history flood on subscribe; the debounced reconcile and `tab_id` correlation absorb it.
 - The output contract (`{ pane_id, label, status }` lines, with `gone` / `closed`) is unchanged, so the parent-role consumer (`processLine` → widget + wake) and its tests are untouched. See ADR-0004.

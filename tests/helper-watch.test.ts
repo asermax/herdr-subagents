@@ -85,6 +85,13 @@ const entry = (pane_id: string, label: string): RegistryEntry => ({
   status: "idle",
 });
 
+// A worktree child: its tab lives in the worktree's own workspace, so its
+// disposal path is worktree remove (no tab_closed), not tab close.
+const wtEntry = (pane_id: string, label: string): RegistryEntry => ({
+  ...entry(pane_id, label),
+  workspace_id: "w9",
+});
+
 // --- watch harness ------------------------------------------------------
 
 // watchChildren resolves only on abort, so each test drives it with an
@@ -263,6 +270,94 @@ describe("helper watch (subscriptions)", () => {
     await flush(80);
 
     expect(statuses()).toEqual(["working", "closed"]);
+  });
+
+  it("emits closed when a worktree child's workspace is disposed after helper close", async () => {
+    // THE REGRESSION: `worktree remove` (the last-child-out close path)
+    // disposes the workspace WITHOUT emitting tab_closed — verified against
+    // herdr 0.9.0, which emits worktree_removed + workspace_closed only. The
+    // child used to stick on the fleet line forever.
+    seedRegistry([wtEntry("w9:p1", "reviewer")]);
+    server.setCurrentStatus("w9:p1", "done");
+    startWatch();
+    await flush();
+
+    seedRegistry([]); // helper close removed it (registry first)
+    server.pushWorkspaceDisposed("w9"); // worktree remove — no tab_closed
+    await flush(80);
+
+    expect(statuses()).toEqual(["done", "closed"]);
+  });
+
+  it("emits gone when a worktree workspace is disposed while the child is still tracked", async () => {
+    // The human closed the whole worktree workspace without helper close: the
+    // registry still tracks the child, so the loss reads `gone` and wakes.
+    seedRegistry([wtEntry("w9:p1", "reviewer")]);
+    server.setCurrentStatus("w9:p1", "working");
+    startWatch();
+    await flush();
+
+    server.pushWorkspaceDisposed("w9");
+    await flush(80);
+
+    expect(statuses()).toEqual(["working", "gone"]);
+  });
+
+  it("emits closed from the reconcile prune when the closure event was missed", async () => {
+    // A fleet reconnect window can drop a tab_closed. The registry entry is
+    // gone (helper close ran registry-first), so the next reconcile prunes the
+    // orphaned sub and still tells the parent `closed`.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "done");
+    startWatch();
+    await flush();
+
+    seedRegistry([]); // helper close removed it — but NO tab_closed arrives
+    server.pushPaneCreated("w1Z:p9"); // any creation triggers the debounced reconcile
+    await flush(80);
+
+    expect(statuses()).toEqual(["done", "closed"]);
+  });
+
+  it("emits gone when a live child's pane stops resolving", async () => {
+    // herdr restarts renumber pane ids: the resubscribe answers
+    // pane_not_found on a sub that WAS live. Dying silently (the old behavior)
+    // stuck the child on the fleet line at its last status forever.
+    seedRegistry([entry("w1Z:p1", "cleaner")]);
+    server.setCurrentStatus("w1Z:p1", "working");
+    startWatch();
+    await flush();
+
+    server.markStale("w1Z:p1");
+    server.dropPane("w1Z:p1"); // the status socket dies with the pane
+    server.pushPaneCreated("w1Z:p9"); // the reconcile reopens → pane_not_found
+    await flush(120);
+
+    expect(statuses()).toEqual(["working", "gone"]);
+  });
+
+  it("recovers a fleet socket whose subscription was rejected", async () => {
+    // herdr answers an invalid subscribe batch with an error envelope and
+    // keeps the socket open — an event-less fleet that never reconnects. The
+    // watch must treat the envelope as a fleet death and come back.
+    seedRegistry([entry("w1Z:p1", "first")]);
+    server.setCurrentStatus("w1Z:p1", "working");
+    startWatch();
+    await flush();
+
+    server.rejectFleetSubscriptions();
+    await flush(10);
+    // The reconnect (fleetReconnectMs=40) reconciles the registry as its
+    // snapshot — the second child is discovered without any pane_created.
+    seedRegistry([entry("w1Z:p1", "first"), entry("w1Z:p2", "second")]);
+    server.setCurrentStatus("w1Z:p2", "idle");
+    await flush(140);
+
+    expect(lines.find((l) => l.pane_id === "w1Z:p2")).toEqual({
+      pane_id: "w1Z:p2",
+      label: "second",
+      status: "idle",
+    });
   });
 
   it("emits unknown (dead-pane) via the status subscription", async () => {

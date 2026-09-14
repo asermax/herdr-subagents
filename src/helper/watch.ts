@@ -27,6 +27,10 @@ import { HerdrError } from "./herdr-types.js";
 //     → `gone` (unexpected). `pane.created` (emit `pane_created`) discovers new
 //     children. herdr < 0.9 replayed a history flood on subscribe (0.9 starts
 //     live); the debounced reconcile / `tab_id` correlation absorb either.
+//   - Disposing a worktree workspace (`worktree remove` — the last-child close
+//     path) emits `worktree_removed` + `workspace_closed` and NO `tab_closed`
+//     per tab (verified against herdr 0.9.0), so those two events are closure
+//     signals too, correlated by `workspace_id` against the tracked children.
 //
 // spawn writes the registry right after tabCreate (before agentStart), so a
 // `pane_created` reconcile finds the child already tracked. The registry is
@@ -58,6 +62,7 @@ export interface WatchDeps {
 interface RegistryChild {
   pane_id: string;
   tab_id: string;
+  workspace_id: string;
   label: string;
 }
 
@@ -68,6 +73,7 @@ interface RegistryChild {
 interface PaneSub {
   label: string;
   tabId: string;
+  workspaceId: string;
   socket: Socket | null;
   buffer: string;
   live: boolean;
@@ -94,6 +100,10 @@ class WatchEngine {
   private safetyTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private stopped = false;
+  // Reconciles are serialized: two overlapping reconciles reading the registry
+  // at different moments could prune a sub the other just opened (a child
+  // added between the two reads). One at a time, the read is the truth.
+  private reconcileChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly socketPath: string,
@@ -129,11 +139,26 @@ class WatchEngine {
   }
 
   // Read the registry and (re)open a status subscription for every tracked
-  // child that lacks a live one. Discovery backstop — closure is handled by
-  // tab.closed, not here.
-  private async reconcile(): Promise<void> {
+  // child that lacks a live one, and drop any sub whose child left the
+  // registry (a deliberate close whose closure event was missed — worktree
+  // disposal emits no tab_closed; a fleet blip can drop one). Discovery
+  // backstop and closure backstop in one pass.
+  private reconcile(): Promise<void> {
+    this.reconcileChain = this.reconcileChain.then(() => this.doReconcile());
+    return this.reconcileChain;
+  }
+
+  private async doReconcile(): Promise<void> {
     if (this.stopped) return;
     const entries = await this.readRegistry();
+    if (entries === null) return; // unreadable — pruning on a bad read would drop live children
+    for (const [paneId, sub] of this.subs) {
+      if (sub.dead) continue;
+      if (Object.prototype.hasOwnProperty.call(entries, paneId)) continue;
+      // Registry-first: an entry that vanished was removed by a deliberate
+      // close, so the terminal line is `closed` — the fleet line shrinks, no wake.
+      this.dropSub(paneId, sub, "closed");
+    }
     for (const child of Object.values(entries)) {
       const sub = this.subs.get(child.pane_id);
       if (sub?.dead) continue;
@@ -141,11 +166,23 @@ class WatchEngine {
         // Refresh label/tab_id in case the registry changed underneath us.
         sub.label = child.label;
         sub.tabId = child.tab_id;
+        sub.workspaceId = child.workspace_id;
         this.tabIndex.set(child.tab_id, child.pane_id);
         continue;
       }
       this.openSubscription(child);
     }
+  }
+
+  // Tear down one child's stream and write its terminal line. Shared by the
+  // closure events and the reconcile prune.
+  private dropSub(paneId: string, sub: PaneSub, status: string): void {
+    sub.dead = true;
+    sub.socket?.destroy();
+    sub.socket = null;
+    this.subs.delete(paneId);
+    this.tabIndex.delete(sub.tabId);
+    this.write(JSON.stringify({ pane_id: paneId, label: sub.label, status }));
   }
 
   // One connection per child: ONE subscribe (pane.agent_status_changed). The
@@ -157,6 +194,7 @@ class WatchEngine {
       this.subs.get(child.pane_id) ?? {
         label: child.label,
         tabId: child.tab_id,
+        workspaceId: child.workspace_id,
         socket: null,
         buffer: "",
         live: false,
@@ -167,6 +205,7 @@ class WatchEngine {
       };
     sub.label = child.label;
     sub.tabId = child.tab_id;
+    sub.workspaceId = child.workspace_id;
     sub.buffer = "";
     sub.live = false;
     sub.dead = false;
@@ -249,9 +288,15 @@ class WatchEngine {
       return;
     }
     // error envelope (e.g. pane_not_found on a stale subscribe): the pane does
-    // not exist. Mark dead so it emits nothing and is not retried — a stale
-    // registry entry that was never live stays silent.
-    if (env.error) sub.dead = true;
+    // not exist. A sub that was never live is a stale registry entry — silent
+    // dead, no retry. A sub that WAS live lost a real pane (herdr restart
+    // renumbered ids, or the pane vanished without tab_closed): dispose it so
+    // the parent learns gone/closed instead of the child sticking on the
+    // fleet line forever.
+    if (env.error) {
+      if (sub.live || sub.seenReal) void this.dispose(paneId);
+      else sub.dead = true;
+    }
   }
 
   // Emit only on a change; a stable status is not re-sent.
@@ -287,7 +332,7 @@ class WatchEngine {
     if (!sub.live) sub.dead = true;
   }
 
-  // --- fleet: pane.created (discovery) + tab.closed (closure) ------------
+  // --- fleet: pane.created (discovery) + tab.closed / workspace disposal ---
 
   private openFleet(): void {
     if (this.stopped || this.fleet) return;
@@ -299,7 +344,12 @@ class WatchEngine {
             id: "fleet",
             method: "events.subscribe",
             params: {
-              subscriptions: [{ type: "pane.created" }, { type: "tab.closed" }],
+              subscriptions: [
+                { type: "pane.created" },
+                { type: "tab.closed" },
+                { type: "worktree.removed" },
+                { type: "workspace.closed" },
+              ],
             },
           }) + "\n",
         );
@@ -310,6 +360,7 @@ class WatchEngine {
     }
     this.fleet = socket;
     this.fleetDead = false;
+    this.fleetBuffer = "";
     socket.on("data", (chunk: Buffer) => {
       this.fleetBuffer += chunk.toString();
       let nl: number;
@@ -317,15 +368,35 @@ class WatchEngine {
         const line = this.fleetBuffer.slice(0, nl);
         this.fleetBuffer = this.fleetBuffer.slice(nl + 1);
         if (line.trim() === "") continue;
-        let env: { event?: string; data?: { tab_id?: string } };
+        let env: {
+          event?: string;
+          data?: { tab_id?: string; workspace?: { workspace_id?: string } };
+          error?: unknown;
+        };
         try {
           env = JSON.parse(line);
         } catch {
           continue;
         }
-        // pane_created (underscore) → discover; tab_closed (underscore) → closure.
-        if (env.event === "pane_created") this.scheduleReconcile();
-        else if (env.event === "tab_closed" && env.data?.tab_id) this.handleClose(env.data.tab_id);
+        // A rejected subscribe (error envelope) leaves the connection open but
+        // event-less forever — treat it as a fleet death so the reconnect loop
+        // replaces it.
+        if (env.error) {
+          this.handleFleetDeath();
+          return;
+        }
+        // pane_created → discover; tab_closed → closure; worktree_removed /
+        // workspace_closed → closure of every child in that workspace.
+        if (env.event === "pane_created") {
+          this.scheduleReconcile();
+        } else if (env.event === "tab_closed" && env.data?.tab_id) {
+          this.handleClose(env.data.tab_id);
+        } else if (
+          (env.event === "worktree_removed" || env.event === "workspace_closed") &&
+          env.data?.workspace?.workspace_id
+        ) {
+          this.handleWorkspaceClosed(env.data.workspace.workspace_id);
+        }
       }
     });
     socket.on("error", () => this.handleFleetDeath());
@@ -334,22 +405,42 @@ class WatchEngine {
 
   // A tracked child's tab closed. closed (deliberate helper close removed it
   // from the registry first) vs gone (still tracked). The registry decides.
-  private async handleClose(tabId: string): Promise<void> {
+  private handleClose(tabId: string): void {
     if (this.stopped) return;
     const paneId = this.tabIndex.get(tabId);
     if (!paneId) return; // not one of our children
+    void this.dispose(paneId);
+  }
+
+  // A workspace closed or a worktree was removed. `worktree remove` disposes
+  // the checkout, the workspace, and every tab in it WITHOUT emitting
+  // tab_closed — this is the only closure signal for a worktree child.
+  private handleWorkspaceClosed(workspaceId: string): void {
+    if (this.stopped) return;
+    for (const [paneId, sub] of [...this.subs]) {
+      if (sub.workspaceId === workspaceId) void this.dispose(paneId);
+    }
+  }
+
+  // Dispose one child and write its terminal line. Still tracked in the
+  // registry → `gone` (unexpected loss, wakes); removed → `closed`
+  // (deliberate). The claim is synchronous — worktree disposal delivers two
+  // events for the same workspace, and both would otherwise race the async
+  // registry read and emit twice. An unreadable registry releases the claim
+  // and defers the decision to the reconcile prune rather than guessing.
+  private async dispose(paneId: string): Promise<void> {
+    if (this.stopped) return;
     const sub = this.subs.get(paneId);
-    if (!sub) return;
+    if (!sub || sub.dead) return;
+    sub.dead = true;
     const entries = await this.readRegistry();
     if (this.stopped) return;
+    if (entries === null) {
+      sub.dead = false;
+      return;
+    }
     const stillTracked = Object.prototype.hasOwnProperty.call(entries, paneId);
-    sub.dead = true;
-    sub.socket?.destroy();
-    sub.socket = null;
-    this.subs.delete(paneId);
-    this.tabIndex.delete(tabId);
-    const status = stillTracked ? "gone" : "closed";
-    this.write(JSON.stringify({ pane_id: paneId, label: sub.label, status }));
+    this.dropSub(paneId, sub, stillTracked ? "gone" : "closed");
   }
 
   private scheduleReconcile(): void {
@@ -406,12 +497,14 @@ class WatchEngine {
     }
   }
 
-  private async readRegistry(): Promise<Record<string, RegistryChild>> {
+  // null = the store could not be read; callers must not treat that as empty
+  // (pruning on a bad read would drop live children).
+  private async readRegistry(): Promise<Record<string, RegistryChild> | null> {
     try {
       const entries = (await this.store.read()) as Record<string, RegistryChild>;
       return entries ?? {};
     } catch {
-      return {};
+      return null;
     }
   }
 }
