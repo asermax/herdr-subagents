@@ -1,3 +1,10 @@
+## [0.9.4](https://github.com/asermax/herdr-subagents/compare/v0.9.3...v0.9.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* make spawn-body delivery failures diagnosable ([b89204d](https://github.com/asermax/herdr-subagents/commit/b89204d7ecc5203eaea401027bd5fc8f481ddc35))
+
 ## [0.9.3](https://github.com/asermax/herdr-subagents/compare/v0.9.2...v0.9.3) (2026-09-14)
 
 
