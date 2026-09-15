@@ -1,0 +1,17 @@
+{
+  "description": "herdr-subagents SessionStart onboarding injection.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/onboarding.sh"]
+          }
+        ]
+      }
+    ]
+  }
+}
