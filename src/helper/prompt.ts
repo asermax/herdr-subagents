@@ -1,5 +1,6 @@
 import type { AgentSnapshot, AgentStatus, HerdrClient } from "./herdr-types.js";
 import { HerdrError } from "./herdr-types.js";
+import { readScreen } from "./screen.js";
 import type { SpawnFailure } from "./spawn.js";
 
 // `prompt` delivers a task and verifies delivery. A successful `agent.prompt`
@@ -52,8 +53,10 @@ export async function deliverPrompt(
   body: string,
   bounds: PromptBounds,
 ): Promise<PromptReceipt> {
+  let lastStatus: AgentStatus | undefined;
   for (let attempt = 0; attempt < bounds.maxPromptAttempts; attempt++) {
     const before = await client.agentGet(paneId);
+    if (before !== null) lastStatus = before.agent_status;
     const fromSeq = before?.state_change_seq ?? 0;
     await client.agentPrompt(paneId, body);
 
@@ -85,7 +88,17 @@ export async function deliverPrompt(
     }
     // No transition in the window -> dropped. Resend.
   }
-  throw { reason: "delivery", message: `prompt not delivered after ${bounds.maxPromptAttempts} attempts` } satisfies SpawnFailure;
+  // Why the child never acted — an error it threw, a dialog it sits on — lives
+  // on its pane and nowhere else, so capture the screen as evidence before
+  // failing.
+  const screen = await readScreen(client, paneId);
+  throw {
+    reason: "delivery",
+    message: `prompt sent ${bounds.maxPromptAttempts} times but the child never acted on it — last seen ${
+      lastStatus ?? "undetected"
+    }`,
+    ...(screen !== undefined ? { screen } : {}),
+  } satisfies SpawnFailure;
 }
 
 function receipt(beforeSeq: number, delivered: AgentSnapshot): PromptReceipt {

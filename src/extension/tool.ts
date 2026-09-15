@@ -328,26 +328,39 @@ export function formatError(
   stderr: string,
 ): string {
   const detail = errorMessage(json) || stderr.trim() || "the subagent command exited with an error";
+  let message: string;
   // A spawn with a body can fail at delivery: the child is live and tracked,
-  // so "failed to spawn" would misread as a dead child.
+  // so "failed to spawn" would misread as a dead child. The retry hint names
+  // this tool — never the helper binary the model must not learn about.
   if (command === "spawn" && failureReason(json) === "delivery") {
-    return `Subagent ${childName(options.label, options.agent)} spawned but its prompt was not delivered: ${detail}`;
+    const paneId = stringField(json, "pane_id");
+    const retry =
+      paneId === undefined
+        ? ""
+        : ` — retry with this tool's prompt command: { pane_id: "${paneId}", body: "<supervisor-agent>…</supervisor-agent>" }`;
+    message = `Subagent ${childName(options.label, options.agent)} spawned but its prompt was not delivered: ${detail}${retry}`;
+  } else {
+    const target = commandTarget(command, options);
+    message = `Failed to ${command} ${target}: ${detail}`;
   }
-  const target = commandTarget(command, options);
-  return `Failed to ${command} ${target}: ${detail}`;
+  // The evidence the helper captured from the child's pane (why a delivery
+  // failed, what a blocked child sits on) rides the error JSON.
+  const screen = stringField(json, "screen");
+  return screen === undefined ? message : `${message}\nThe child's pane:\n${screen}`;
+}
+
+function stringField(json: unknown | undefined, field: string): string | undefined {
+  if (typeof json !== "object" || json === null) return undefined;
+  const value = (json as Record<string, unknown>)[field];
+  return typeof value === "string" ? value : undefined;
 }
 
 function failureReason(json: unknown | undefined): string | undefined {
-  if (typeof json !== "object" || json === null) return undefined;
-  const reason = (json as Record<string, unknown>)["reason"];
-  return typeof reason === "string" ? reason : undefined;
+  return stringField(json, "reason");
 }
 
 function errorMessage(json: unknown | undefined): string | undefined {
-  if (typeof json !== "object" || json === null) return undefined;
-  const obj = json as Record<string, unknown>;
-  const msg = obj["message"];
-  return typeof msg === "string" ? msg : undefined;
+  return stringField(json, "message");
 }
 
 function commandTarget(command: SubagentCommand, options: SubagentOptions): string {

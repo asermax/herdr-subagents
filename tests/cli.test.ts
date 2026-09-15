@@ -209,6 +209,7 @@ describe("CLI spawn/prompt --body", () => {
         "if (cmd === 'tab' && sub === 'create') ok({ root_pane: { pane_id: 'wS:p1', tab_id: 'wS:t1', workspace_id: 'wS' } });",
         "if (cmd === 'agent' && sub === 'start') ok({ agent: { pane_id: 'wS:p1', tab_id: 'wS:t1', workspace_id: 'wS', name: target, agent: 'pi', agent_status: 'idle', state_change_seq: 5 } });",
         "if (cmd === 'agent' && sub === 'get') ok({ agent: { pane_id: 'wS:p1', tab_id: 'wS:t1', workspace_id: 'wS', name: 'doer', agent: 'pi', agent_status: state.getStatus, state_change_seq: state.seq } });",
+        "if (cmd === 'agent' && sub === 'read') { process.stdout.write(state.screen ?? ''); process.exit(0); }",
         "if (cmd === 'agent' && sub === 'prompt') {",
         "  if (state.promptFails) { process.stderr.write(JSON.stringify({ id: 1, error: { code: 'prompt_failed', message: 'herdr refused' } })); process.exit(1); }",
         "  appendFileSync(state.log, body + '\\n');",
@@ -349,10 +350,62 @@ describe("CLI spawn/prompt --body", () => {
       stubEnv,
     );
     expect(code).toBe(1);
-    expect(stderr).toMatch(/alive but the prompt was not delivered/);
+    expect(stderr).toMatch(/alive but the prompt was not delivered \(prompt_failed: herdr refused\)/);
     expect(stderr).toMatch(/helper prompt wS:p1 --body/);
-    expect(JSON.parse(stdout.trim())).toMatchObject({ reason: "delivery" });
+    // The structured payload is what the pi extension embeds: it names the
+    // pane but never the helper binary.
+    const payload = JSON.parse(stdout.trim());
+    expect(payload).toMatchObject({ reason: "delivery", pane_id: "wS:p1" });
+    expect(payload.message).toContain("herdr refused");
+    expect(payload.message).not.toContain("helper prompt");
     // The child is live and stays tracked, unacked.
+    const entry = readEntry();
+    expect(entry).toBeTruthy();
+    expect(entry.acked_seq).toBeUndefined();
+  });
+
+  it("a delivery exhaustion reports why the child never acted, with its pane", async () => {
+    // No events scripted and the child never leaves idle: every send looks
+    // dropped until the attempts run out. The pane carries the error the
+    // child threw.
+    writeState({
+      getStatus: "idle",
+      seq: 6,
+      promptFails: false,
+      log: join(tmpDir, "prompts.log"),
+      screen: "Error: session crashed",
+    });
+    server.timeoutSubscriptions();
+
+    const { code, stdout, stderr } = await runCli(
+      [
+        "spawn",
+        "--kind",
+        "pi",
+        "--agent",
+        "doer",
+        "--label",
+        "x",
+        "--body",
+        "<supervisor-agent>do it</supervisor-agent>",
+      ],
+      stubEnv,
+    );
+
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/alive but the prompt was not delivered \(prompt sent 3 times/);
+    const payload = JSON.parse(stdout.trim());
+    expect(payload).toMatchObject({
+      reason: "delivery",
+      pane_id: "wS:p1",
+      screen: "Error: session crashed",
+    });
+    expect(payload.message).toContain("never acted on it — last seen idle");
+    expect(payload.message).not.toContain("helper prompt");
+    // Three sends landed before giving up.
+    expect(readFileSync(join(tmpDir, "prompts.log"), "utf8")).toBe(
+      "<supervisor-agent>do it</supervisor-agent>\n".repeat(3),
+    );
     const entry = readEntry();
     expect(entry).toBeTruthy();
     expect(entry.acked_seq).toBeUndefined();

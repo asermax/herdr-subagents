@@ -128,9 +128,12 @@ describe("prompt verify-delivery", () => {
     expect(prompts.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("exhausts delivery attempts and throws a delivery failure", async () => {
+  it("exhausts delivery attempts and throws a delivery failure carrying the child's pane", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
     client.opts.snapshots = { "w1Z:p1": makeSnapshot({ state_change_seq: 5 }) };
+    // The child threw — the error lives on its pane, and the failure must
+    // carry it rather than reporting a bare "not delivered".
+    client.opts.screens = { "w1Z:p1": "Error: model overloaded" };
     // No events ever — every prompt looks dropped.
     server.script([]);
 
@@ -142,6 +145,9 @@ describe("prompt verify-delivery", () => {
     );
 
     expect(failure.reason).toBe("delivery");
+    expect(failure.message).toContain("never acted on it");
+    expect(failure.message).toContain("last seen idle");
+    expect(failure.screen).toBe("Error: model overloaded");
     const prompts = client.calls.filter((c) => c.method === "agent.prompt");
     expect(prompts).toHaveLength(2);
   });

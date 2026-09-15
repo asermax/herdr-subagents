@@ -238,10 +238,21 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
     // The spawn succeeded; the child is live and tracked. A delivery failure
     // must not read as a dead child — report the pane so the parent can retry
     // with `prompt`.
-    const cause = e instanceof Error ? e.message : String(e);
-    const message = `the child ${result.pane_id} is alive but the prompt was not delivered (${cause}) — retry with 'helper prompt ${result.pane_id} --body <text>' or '--body-file <path>'`;
-    emitError({ reason: "delivery", message });
-    fail(`spawn ok, prompt not delivered: ${message}`);
+    const cause = isSpawnFailure(e) || e instanceof Error ? e.message : String(e);
+    const message = `the child ${result.pane_id} is alive but the prompt was not delivered (${cause})`;
+    // The retry hint names the helper binary — a CLI-surface concern only.
+    // The structured payload stays hint-free: the pi extension embeds its
+    // message verbatim and must point at the subagent tool, not the binary
+    // the model must never learn about.
+    emitError({
+      reason: "delivery",
+      pane_id: result.pane_id,
+      message,
+      ...(isSpawnFailure(e) && e.screen !== undefined ? { screen: e.screen } : {}),
+    });
+    fail(
+      `spawn ok, prompt not delivered: ${message} — retry with 'helper prompt ${result.pane_id} --body <text>' or '--body-file <path>'`,
+    );
   }
 }
 

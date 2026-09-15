@@ -55,6 +55,11 @@ export class StubHerdrServer {
   // or wait requests have targeted this pane. Drives `deliverOnAttempt`.
   private subAttempts: Record<string, number> = {};
   private waitAttempts: Record<string, number> = {};
+  // Reply to every subsequent events.subscribe with a wait_timeout error. The
+  // socket client settles a wait on that error exactly as on its own timer,
+  // so delivery-verification tests exhaust their attempt budget instantly
+  // instead of sitting out the real stall window on every attempt.
+  private failSubs = false;
   // Per-pane current status returned to an `agent.get` probe. Only set
   // explicitly; unset panes answer agent_not_found and so emit no probe line
   // (keeps the change-only tests unchanged).
@@ -81,6 +86,10 @@ export class StubHerdrServer {
 
   script(events: ScriptedEvent[]): void {
     this.events = events;
+  }
+
+  timeoutSubscriptions(): void {
+    this.failSubs = true;
   }
 
   // Set the current status a `watch` probe (agent.get) reads for a pane, and
@@ -267,6 +276,15 @@ export class StubHerdrServer {
     socket: Socket,
   ): void {
     const subs = req.params.subscriptions ?? [];
+    if (this.failSubs) {
+      socket.write(
+        JSON.stringify({
+          id: req.id,
+          error: { code: "wait_timeout", message: "no status change" },
+        }) + "\n",
+      );
+      return;
+    }
     // A subscribe targeting a stale pane resets the connection — real herdr
     // answers `pane_not_found` (id `<reqid>:sub:<idx>:probe`) and closes the
     // socket. Modeling it lets the per-pane watch prove a stale pane only ever

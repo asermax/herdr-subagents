@@ -328,16 +328,49 @@ describe("formatError", () => {
     expect(msg).toBe("Failed to spawn subagent x: never ready");
   });
 
-  it("spawn delivery failure: the child is live, not a failed spawn", () => {
+  it("spawn delivery failure: the child is live and the retry names this tool", () => {
     const msg = formatError(
       "spawn",
       { label: "x" },
-      { reason: "delivery", message: "the child w1:p2 is alive but the prompt was not delivered" },
+      {
+        reason: "delivery",
+        pane_id: "w1:p2",
+        message:
+          "the child w1:p2 is alive but the prompt was not delivered (prompt sent 3 times but the child never acted on it — last seen idle)",
+      },
       "",
     );
     expect(msg).toBe(
-      "Subagent x spawned but its prompt was not delivered: the child w1:p2 is alive but the prompt was not delivered",
+      'Subagent x spawned but its prompt was not delivered: the child w1:p2 is alive but the prompt was not delivered (prompt sent 3 times but the child never acted on it — last seen idle)'
+        + ' — retry with this tool\'s prompt command: { pane_id: "w1:p2", body: "<supervisor-agent>…</supervisor-agent>" }',
     );
+  });
+
+  it("spawn delivery failure without a pane id omits the retry hint", () => {
+    const msg = formatError(
+      "spawn",
+      { label: "x" },
+      { reason: "delivery", message: "the child is alive but the prompt was not delivered" },
+      "",
+    );
+    expect(msg).toBe(
+      "Subagent x spawned but its prompt was not delivered: the child is alive but the prompt was not delivered",
+    );
+  });
+
+  it("appends the pane a failure captured as evidence", () => {
+    const msg = formatError(
+      "spawn",
+      { label: "x" },
+      {
+        reason: "delivery",
+        pane_id: "w1:p2",
+        message: "the child w1:p2 is alive but the prompt was not delivered",
+        screen: "Error: session crashed",
+      },
+      "",
+    );
+    expect(msg).toContain("The child's pane:\nError: session crashed");
   });
 
   it("falls back to stderr when no JSON is present", () => {
