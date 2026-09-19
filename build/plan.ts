@@ -121,13 +121,14 @@ function delegateSkill(map: TokenMap, suffix = ""): string {
 }
 
 // pi-only: names the concrete directory the extension scans for agent
-// definitions, so the agent can look there before picking an --agent name.
-// `.pi/agents/` is scanned recursively.
+// definitions, so the agent can look there before picking an agent name, and
+// states that applying the definition is the harness's job — the parent
+// passes a name and nothing else.
 const PI_AGENT_DIRS = `
 
 ## Agent definitions on pi
 
-Agent names you can pass to \`--agent\` are defined as \`.md\` files under \`.pi/agents/\` (scanned recursively). Run \`ls -R .pi/agents\` to see which agents are available before picking a name.
+The \`agent\` option of \`spawn\` takes the name of an agent definition — a \`.md\` file under the project's \`.pi/agents/\`, scanned recursively. Run \`ls -R .pi/agents\` to see which names exist before picking one. The name is all you pass: the child's system prompt is applied from the definition automatically, so never paste the definition into the body nor tell the child to read the file. If \`.pi/agents\` does not exist, the project defines no agents — omit \`agent\` rather than looking elsewhere.
 `;
 
 function piManifest(version: string): string {

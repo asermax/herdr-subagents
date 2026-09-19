@@ -58,7 +58,11 @@ const subagentSchema = Type.Object({
   ]),
   options: Type.Object({
     kind: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("claude")])),
-    agent: Type.Optional(Type.String({ description: "Agent name (not a path)" })),
+    agent: Type.Optional(
+      Type.String({
+        description: "Agent name — the definition's system prompt is applied automatically (never a path)",
+      }),
+    ),
     label: Type.Optional(Type.String({ description: "Tab label" })),
     model: Type.Optional(
       Type.String({
@@ -464,6 +468,7 @@ const PROMPT_SNIPPET =
 const PROMPT_GUIDELINES: string[] = [
   "Use `subagent` to delegate separable work to a child agent running in its own herdr tab — one tab, one task.",
   "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string, body?: string, body_file?: string, worktree?: boolean, branch?: string, base?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. Pass `body` (wrapped in `<supervisor-agent>…</supervisor-agent>`) to send the task in the same call, or `body_file` with a path to a file whose content is the body (absolute, or relative to the cwd). Returns `{ pane_id, tab_id }` — keep both.",
+  "`agent` (spawn only) runs the child under a named agent definition: the child's system prompt is set from the definition automatically, at spawn. Pass only the name — never a path, never the definition pasted into `body`, and never an instruction for the child to read the file. On pi, definitions are `.md` files under the project's `.pi/agents/`.",
   "`prompt`: options `{ pane_id: string, body: string }` or `{ pane_id: string, body_file: string }`. Follow-up prompts to a spawned child. Wrap the body in `<supervisor-agent>…</supervisor-agent>` so the child knows it is a supervisor directive.",
   "`collect`: options `{ pane_id: string }`. Returns the child's last message as a descriptive summary including status, message, and whether the child is asking a question (`ask`). A question means reply, do not close.",
   "`close`: options `{ tab_id: string }`. Close a child once you have its result and no longer need it.",
