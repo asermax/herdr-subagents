@@ -1,3 +1,10 @@
+# [0.10.0](https://github.com/asermax/herdr-subagents/compare/v0.9.4...v0.10.0) (2026-09-20)
+
+
+### Features
+
+* clarify child closure timing as a delegation decision ([7829487](https://github.com/asermax/herdr-subagents/commit/7829487f77e94a8179011c5c2cf8f2c4235c1c8e))
+
 ## [0.9.4](https://github.com/asermax/herdr-subagents/compare/v0.9.3...v0.9.4) (2026-09-15)
 
 
