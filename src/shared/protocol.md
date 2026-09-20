@@ -96,7 +96,7 @@ Once you no longer need a child, you can close it.
 
 ## Close
 
-Close a child once you have its result and no longer need it. Closing before spawning the next batch keeps the fleet clean.
+Close a child once you have its result and no longer need it. Closing before spawning the next batch keeps the fleet clean. The timing is a delegation question, not a results question: keep a child open because a fix round is coming, close it when nothing more will be delegated to it.
 
 ## The fleet
 
