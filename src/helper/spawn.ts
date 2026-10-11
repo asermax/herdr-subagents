@@ -67,7 +67,7 @@ export interface SpawnInput {
   // the harness's default model runs.
   model?: string;
   // Extra argv forwarded to the child's harness (e.g. --extension, --skill on
-  // pi; --plugin-directory on claude). Empty in production. Computed by the
+  // pi; --plugin-dir on claude). Empty in production. Computed by the
   // caller from the parent's own launch argv (cli.ts).
   passThroughArgs?: readonly string[];
   // Extra env forwarded to the child's tab. Defaults to the gate plus

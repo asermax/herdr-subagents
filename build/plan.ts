@@ -22,7 +22,10 @@ export type EmitFile =
   // Bundle a TypeScript entry into a single self-contained ESM file with a
   // node shebang, marked executable. Used to ship the helper binary into an
   // artifact so it can be spawned by absolute path.
-  | { dest: string; type: "bundle"; src: string };
+  | { dest: string; type: "bundle"; src: string }
+  // Bundle a Claude hooks module entry into one ESM file with no Node and no
+  // imports outside itself.
+  | { dest: string; type: "bundle-mod"; src: string };
 
 const PROTOCOL = "shared/protocol.md";
 
@@ -31,6 +34,8 @@ const ONBOARDING = "shared/onboarding.md";
 const CLAUDE_ONBOARDING_HOOK = "claude/hooks/onboarding.sh";
 
 const CLAUDE_HOOKS_JSON = "claude/hooks/hooks.json";
+
+const CLAUDE_MOD = "claude/mod/register.ts";
 
 const PI_README = "pi/README.md";
 
@@ -43,9 +48,10 @@ const CLAUDE_README = "claude/README.md";
  * `references/`. The extension registers the skill via the package manifest.
  *
  * claude: the plugin ships the delegate skill at `skills/delegate/SKILL.md`
- * (the path Claude auto-discovers), the onboarding the hook reads, the
- * `hooks/hooks.json` wiring, and the hook script itself. The manifest lives at
- * `.claude-plugin/plugin.json`, the path Claude reads on enable.
+ * (the path Claude auto-discovers), the `hooks/hooks.json` wiring, the mod it
+ * loads (`hooks/register.js`), and the onboarding hook script with the
+ * onboarding it reads. The manifest lives at `.claude-plugin/plugin.json`, the
+ * path Claude reads on enable.
  */
 export function filePlan(harness: Harness): EmitFile[] {
   if (harness === "pi") {
@@ -65,9 +71,12 @@ export function filePlan(harness: Harness): EmitFile[] {
       { dest: "extension/parent-role.ts", type: "copy", src: "extension/parent-role.ts" },
       { dest: "extension/registrar.ts", type: "copy", src: "extension/registrar.ts" },
       { dest: "extension/tool.ts", type: "copy", src: "extension/tool.ts" },
+      // The harness-agnostic core the extension imports as ../core/*.
+      { dest: "core/subagent.ts", type: "copy", src: "core/subagent.ts" },
+      { dest: "core/fleet.ts", type: "copy", src: "core/fleet.ts" },
       // The helper binary, bundled to a single executable at the package root
-      // so the extension (and the {{helper}} token) can spawn it by absolute
-      // path. herdr-helper resolves relative to the package root.
+      // so the extension can spawn it by absolute path. herdr-helper resolves
+      // relative to the package root.
       { dest: "herdr-helper", type: "bundle", src: "helper/cli.ts" },
       { dest: "package.json", type: "generate", render: () => piManifest(readVersion()) },
     ];
@@ -84,10 +93,10 @@ export function filePlan(harness: Harness): EmitFile[] {
     { dest: "references/onboarding.md", type: "copy", src: ONBOARDING },
     { dest: "README.md", type: "copy", src: CLAUDE_README },
     { dest: "hooks/hooks.json", type: "copy", src: CLAUDE_HOOKS_JSON },
+    { dest: "hooks/register.js", type: "bundle-mod", src: CLAUDE_MOD },
     { dest: "hooks/onboarding.sh", type: "copy", src: CLAUDE_ONBOARDING_HOOK },
-    // The helper binary, bundled under bin/ at the plugin root so
-    // $CLAUDE_PLUGIN_ROOT/bin/herdr-helper (the {{helper}} token) resolves at
-    // runtime under the plugin's install dir.
+    // The helper binary, bundled under bin/ at the plugin root, where the mod
+    // finds it through `$.plugin.root`.
     { dest: "bin/herdr-helper", type: "bundle", src: "helper/cli.ts" },
     {
       dest: ".claude-plugin/plugin.json",
@@ -148,13 +157,12 @@ function piManifest(version: string): string {
         publishConfig: {
           access: "public",
         },
-        // The helper binary, invokable by absolute path from the extension and
-        // the {{helper}} skill token.
+        // The helper binary, invokable by absolute path from the extension.
         bin: {
           "herdr-helper": "herdr-helper",
         },
         // Extension source + the helper binary ship in the tarball.
-        files: ["skills/", "references/", "extension/", "herdr-helper", "README.md"],
+        files: ["skills/", "references/", "extension/", "core/", "herdr-helper", "README.md"],
         pi: {
           extensions: ["./extension/index.ts"],
           skills: ["./skills"],
@@ -231,16 +239,13 @@ function claudeMarketplace(version: string): string {
  * the per-harness map is asserted against in both directions before any write.
  *
  * Includes the shared protocol (the parent-facing body) plus the per-harness
- * wake and invoke fragments. The fragments are injected as token values, but
- * they themselves contain tokens (the wake fragment references {{helper}} for
- * the watch/wait spawn; the claude invoke fragment references {{helper}} for
- * bash paths) — so they must be in the coverage set to satisfy the map→source
- * direction.
+ * invoke fragment. The fragment is injected as a token value, so a token
+ * inside it would be substituted too — it is in the coverage set so the
+ * map→source direction sees it.
  */
 export function coverageSources(harness: Harness): string[] {
   return [
     readSrc(PROTOCOL),
-    readSrc(`skills/delegate/${harness}.md`),
     readSrc(`skills/delegate/invoke-${harness}.md`),
   ];
 }

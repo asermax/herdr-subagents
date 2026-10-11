@@ -5,7 +5,7 @@ export class UnknownTokenError extends Error {
   readonly token: string;
 
   constructor(token: string) {
-    super(`Unknown substitution token ${token}. Known tokens: {{wake}}, {{helper}}, {{invoke}}.`);
+    super(`Unknown substitution token ${token}. Known tokens: {{invoke}}.`);
     this.name = "UnknownTokenError";
     this.token = token;
   }
@@ -32,7 +32,7 @@ export class TokenNotConvergedError extends Error {
 
 function substituteOnce(source: string, map: TokenMap): string {
   return source.replace(TOKEN_PATTERN, (full, name: string) => {
-    if (name !== "wake" && name !== "helper" && name !== "invoke") {
+    if (name !== "invoke") {
       throw new UnknownTokenError(full);
     }
 
@@ -52,9 +52,8 @@ function substituteOnce(source: string, map: TokenMap): string {
  * - Errors when a known token appears in source but the map omits its value.
  * - Token-free text returns verbatim.
  *
- * Iterates to a fixpoint because a token's value may itself contain a token —
- * the wake fragment (the value of `{{wake}}`) references `{{helper}}`. Bounded
- * to one pass per known token; a non-converging map (a value referencing its
+ * Iterates to a fixpoint because a token's value may itself contain a token.
+ * Bounded to one pass per known token; a non-converging map (a value referencing its
  * own token) raises TokenNotConvergedError rather than looping forever.
  */
 export function substitute(source: string, map: TokenMap): string {

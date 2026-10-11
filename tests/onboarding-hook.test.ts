@@ -1,10 +1,9 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emitArtifact } from "../build/emit.ts";
-import { HELPER_BIN } from "../build/harness.ts";
 
 // Seam 1: the onboarding hook is a process whose stdout and exit
 // code are observable. Built into a real plugin tree and driven as a subprocess
@@ -102,28 +101,6 @@ describe("SessionStart hook wiring (Seam 1)", () => {
     expect(hook.args).toEqual([
       "${CLAUDE_PLUGIN_ROOT}/hooks/onboarding.sh",
     ]);
-  });
-});
-
-describe("generated claude delegate skill (Seam 1)", () => {
-  it("carries the $CLAUDE_PLUGIN_ROOT helper path and the claude wake fragment", () => {
-    const skillPath = join(PLUGIN_ROOT, "skills/delegate/SKILL.md");
-    expect(existsSync(skillPath)).toBe(true);
-    const body = readFileSync(skillPath, "utf8");
-
-    // The claude wake: model-armed background wait after every prompt.
-    expect(body).toContain("arm the wake");
-    // The helper ships under bin/ at the plugin root; claude expands
-    // $CLAUDE_PLUGIN_ROOT at runtime, so the skill carries that portable path.
-    expect(body).toContain("${CLAUDE_PLUGIN_ROOT}/bin/" + HELPER_BIN);
-    // No placeholder survives the build.
-    expect(body).not.toMatch(/\{\{wake\}\}/);
-    expect(body).not.toMatch(/\{\{helper\}\}/);
-  });
-
-  it("names the skill /delegate via frontmatter", () => {
-    const body = readFileSync(join(PLUGIN_ROOT, "skills/delegate/SKILL.md"), "utf8");
-    expect(body).toMatch(/^---\nname: delegate\n/m);
   });
 });
 

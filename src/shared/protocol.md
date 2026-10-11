@@ -37,22 +37,22 @@ Label each tab after the work it is doing; a workspace of labelled tabs is your 
 - `kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
 - `agent` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in the project's agent files, never a path — and the name is all you provide: the child's system prompt is applied from the definition at spawn, so never paste the definition into the prompt nor direct the child to read it.
 - `model` is optional. Omitted, the child runs its harness's default model. It is a model name of the child's harness, passed through verbatim, so what is valid depends on `kind`. When you spawn without a model named by the work or the caller, pick one yourself: judge the task's difficulty and choose the cheapest model available that can solve it. Reach for a heavier model only when the work needs the capability — mechanical tasks never do.
-- `body` is optional. Given, the task is delivered with the spawn — one call instead of spawn-then-prompt. Wrap it in `<supervisor-agent>…</supervisor-agent>` exactly as you would with `prompt`; delivery is verified the same way. Every message after it goes through `prompt`. Pass it as text, or through `body_file`/`--body-file` with a path to a file whose content is exactly the body (absolute, or relative to the cwd).
+- `body` is optional. Given, the task is delivered with the spawn — one call instead of spawn-then-prompt. Wrap it in `<supervisor-agent>…</supervisor-agent>` exactly as you would with `prompt`; delivery is verified the same way. Every message after it goes through `prompt`. Pass it as text, or through `body_file` with a path to a file whose content is exactly the body (absolute, or relative to the cwd).
 - The label is final; a child never renames its own tab.
 
 Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly. Two failures are different: `blocked` means the child came up on a startup dialog and never became ready. It is alive, so its tab is kept and its pane comes back with the dialog on it — see **Blocked children**. And a spawn with `body` can fail at delivery: the child is alive and tracked, and the failure names its `pane_id` — retry with `prompt`.
 
 ## Worktrees
 
-`--worktree` gives a child its own checkout on its own branch, in its own herdr workspace, instead of sharing your working directory.
+`worktree` gives a child its own checkout on its own branch, in its own herdr workspace, instead of sharing your working directory.
 
 Use it when the child will **write** — implementing, refactoring, fixing a bug — and above all when several children write at once. Sharing one checkout means they overwrite each other's edits and fight over the same branch.
 
 It is not the default. Research, planning, design, review — anything answered by reading — belongs in your own checkout, where the child sees the code you actually have and leaves nothing behind. A single child making changes is usually fine without one too; isolation pays off when there is something to isolate from.
 
-- `--branch` names the branch. A new name creates a worktree; an existing one joins it.
-- `--base` is what a new branch forks from. Omitted, your current HEAD.
-- Nothing else changes. You prompt, wait, collect, and close a worktree child exactly like any other.
+- `branch` names the branch. A new name creates a worktree; an existing one joins it.
+- `base` is what a new branch forks from. Omitted, your current HEAD.
+- Nothing else changes. You prompt, collect, and close a worktree child exactly like any other.
 
 Several children can share one worktree. Point a second child at an existing branch and it lands in the same checkout alongside the first — that is how you put a reviewer on another child's work, or hand a branch from one child to the next. Children sharing a checkout see each other's edits, so give them non-overlapping work, or run them one after another.
 
@@ -62,11 +62,11 @@ Uncommitted changes are never discarded. If the last child's checkout is dirty, 
 
 ## Prompt
 
-Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it. The first prompt can ride `spawn`'s `body`; `prompt` is for every message after it. Either takes the body as text or through a file path (`body_file` on the tool, `--body-file` on the CLI); the file's content is exactly the body, tag included.
+Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it. The first prompt can ride `spawn`'s `body`; `prompt` is for every message after it. Either takes the body as text or through a file path (`body_file`); the file's content is exactly the body, tag included.
 
 Delivery is verified: the interface watches for the child to act on the prompt and resends if the first send is dropped. A child that is already `working` receives the prompt as a steer — no state change follows a steer, so the accepted submission itself is the receipt and the message is never resent.
 
-{{wake}}
+When a child needs you, your session wakes you automatically, so you never arm a wake yourself: a finished turn (`done`, or an `idle` that ends a turn) wakes you to collect, `blocked` wakes you to surface the dialog to the human, the resume from a block wakes you so you know they answered, and a lost child (`gone`) wakes you too.
 
 ## Blocked children
 

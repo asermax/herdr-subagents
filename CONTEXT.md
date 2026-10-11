@@ -15,7 +15,7 @@ The agent a parent spawned. Used in code, docs, and the parent's voice. The chil
 _Avoid_: spawning child as a synonym for a different concept; do not swap child and subagent freely.
 
 **subagent**:
-Reserved for the child's own self-view (its onboarding voice), for names that already contain the word (`HERDR_SUBAGENT`, the package names), and for the pi tool that wraps the helper. Not a generic synonym for child.
+Reserved for the child's own self-view (its onboarding voice), for names that already contain the word (`HERDR_SUBAGENT`, the package names), and for the tool that wraps the helper. Not a generic synonym for child.
 _Avoid_: using subagent where child is meant.
 
 **human**:
@@ -31,11 +31,15 @@ _Avoid_: runtime, backend.
 A parent spawning a child to do separable work. One tab, one task.
 
 **the helper**:
-The CLI that wraps herdr for the delegation lifecycle (`spawn`, `prompt`, `wait`, `collect`, `list`, `close`, `watch`). On claude it is the complete interface to delegation, invoked over bash. On pi it is wrapped by the `subagent` tool — the model calls the tool, the tool spawns the helper.
+The CLI that wraps herdr for the delegation lifecycle (`spawn`, `prompt`, `wait`, `collect`, `list`, `close`, `watch`). On both harnesses it is wrapped by the `subagent` tool — the model calls the tool, the tool spawns the helper. The model never invokes it directly.
 _Avoid_: the primitive, the wrapper.
 
 **the tool**:
-The `subagent` tool on pi — a single LLM-callable tool that wraps the full helper surface. Takes `command` (spawn|prompt|wait|collect|list|close) and a flat `options` object. Registered by the pi extension; replaces bash helper calls on pi. Claude has no equivalent and uses the helper over bash.
+The `subagent` tool — a single LLM-callable tool that wraps the full helper surface. Takes `command` (spawn|prompt|collect|list|close|read|unblock, plus `wait` on pi) and a flat `options` object. Registered by the pi extension on pi and by the mod on claude.
+
+**the mod**:
+The Claude Code hooks module the claude plugin ships (`hooks/register.js`, bundled from `src/claude/mod/`). Claude's counterpart of the pi extension: registers the tool and runs the parent role (`watch`, the fleet status line, the wake). The child onboarding stays a classic SessionStart hook beside it.
+_Avoid_: the extension (pi's).
 
 **the gate**:
 `HERDR_SUBAGENT=1`, the environment variable whose presence means "this session is a child". Implementation-only: a contract between the helper (which sets it) and the injection hook (which senses it). It appears in no agent-facing file.
@@ -60,7 +64,7 @@ Reading a child's last assistant message and returning it as a structured payloa
 _Avoid_: read, fetch.
 
 **token**:
-A build substitution placeholder in the shared skill source, replaced per harness at build time. Exactly three exist: `{{wake}}` (the content divergence for how a parent is woken), `{{helper}}` (the helper's absolute path, resolved per artifact root at build time), and `{{invoke}}` (the content divergence for how commands are invoked — the `subagent` tool on pi, bash on claude). The build errors on any unknown token.
+A build substitution placeholder in the shared skill source, replaced per harness at build time. Exactly one exists: `{{invoke}}` (the per-harness table of the `subagent` tool's commands). The build errors on any unknown token.
 
 **wake-then-collect**:
 The protocol shape: a wake brings the parent back; the parent then runs collect deliberately. The wake and the payload are deliberately separate so a burst of finishing children cannot flood the parent's context.
@@ -113,7 +117,7 @@ _Avoid_: reading `idle` as "never worked" — after a prompt it means the turn e
 The last `state_change_seq` the parent has been told about for a child, held in the registry with the status at that sequence. `prompt` acks the delivery receipt, `collect` acks the state it read, and `wait` acks what it reported; `wait` uses it as its baseline, so a state that arrives before the wait is armed still counts as new. The acked status matters in one case: a parent last told `blocked` is also woken when the child resumes. See ADR-0008.
 
 **wake**:
-What brings the parent back to a child: a finished turn (`done`, or an `idle` that ends one), a `blocked` dialog, the resume from one, or a lost child (`gone`). On claude it is a `wait` the parent arms per prompt; on pi the extension forwards it from `watch`. Never lost to a missed event — the state reported is probed, not inferred from the stream.
+What brings the parent back to a child: a finished turn (`done`, or an `idle` that ends one), a `blocked` dialog, the resume from one, or a lost child (`gone`). On pi the extension forwards it from `watch`; on claude the mod does, as a prompt that starts a turn once the session is idle. Never lost to a missed event — the state reported is probed, not inferred from the stream.
 
 **blocked**:
 A herdr agent status meaning herdr recognised a dialog on the agent's screen — a tool approval, a startup trust prompt. Non-terminal and benign: the child is alive and answerable. The parent can `read` the pane and `unblock` it with key presses, or hand it to the human; it never closes a blocked child.

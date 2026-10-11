@@ -25,6 +25,11 @@ export function emitArtifact(harness: Harness, artifactRoot: string): void {
     const dest = join(artifactRoot, file.dest);
     mkdirSync(join(dest, ".."), { recursive: true });
 
+    if (file.type === "bundle-mod") {
+      writeFileSync(dest, bundleMod(join(srcDir, file.src)));
+      continue;
+    }
+
     if (file.type === "bundle") {
       // Bundle the entry into a single self-contained ESM file with a node
       // shebang, then mark it executable so it can be spawned by path.
@@ -63,4 +68,20 @@ function bundleHelper(entry: string): string {
   // exactly one.
   const stripped = code.startsWith("#!") ? code.slice(code.indexOf("\n") + 1) : code;
   return "#!/usr/bin/env node\n" + stripped;
+}
+
+// Bundle a Claude hooks module into one ESM file. A hooks module runs with no
+// Node and may import only its own plugin's files, so the shared core is
+// inlined here.
+function bundleMod(entry: string): string {
+  const out = buildSync({
+    entryPoints: [entry],
+    bundle: true,
+    platform: "neutral",
+    format: "esm",
+    target: "es2022",
+    external: ["claude-code"],
+    write: false,
+  });
+  return out.outputFiles[0]?.text ?? "";
 }

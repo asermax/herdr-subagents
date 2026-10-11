@@ -1,1 +1,0 @@
-When a child needs you, your session wakes you automatically, so you never arm a wake yourself: a finished turn (`done`, or an `idle` that ends a turn) wakes you to collect, `blocked` wakes you to surface the dialog to the human, the resume from a block wakes you so you know they answered, and a lost child (`gone`) wakes you too.

@@ -1,5 +1,7 @@
 # The helper is a tool on pi
 
+Superseded by [ADR-0010](0010-the-helper-is-a-tool-on-claude-too.md) for the claude half: claude now has a tool API (hooks modules), and the helper is a tool there too.
+
 On pi the parent drives delegation through a single LLM-callable tool — `subagent` — instead of shelling out to `herdr-helper` over bash. On claude, bash remains the only surface (claude has no extension tool API).
 
 ## Context

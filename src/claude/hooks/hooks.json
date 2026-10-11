@@ -1,5 +1,6 @@
 {
-  "description": "herdr-subagents SessionStart onboarding injection.",
+  "description": "herdr-subagents: the mod (the subagent tool, the fleet status line and wake) and the SessionStart onboarding injection.",
+  "modules": ["./register.js"],
   "hooks": {
     "SessionStart": [
       {

@@ -7,17 +7,12 @@ import {
 
 describe("assertCoverage", () => {
   it("passes when source placeholders and the map agree exactly", () => {
-    const sources = ["arm {{wake}}", "call {{helper}}"];
-    expect(() =>
-      assertCoverage(sources, { wake: "w", helper: "/h" }),
-    ).not.toThrow();
+    expect(() => assertCoverage(["call {{invoke}}"], { invoke: "i" })).not.toThrow();
   });
 
   it("passes when a token is consumed in one of several source files", () => {
-    const sources = ["no tokens here", "{{wake}} lives here"];
-    expect(() =>
-      assertCoverage(sources, { wake: "w" }),
-    ).not.toThrow();
+    const sources = ["no tokens here", "{{invoke}} lives here"];
+    expect(() => assertCoverage(sources, { invoke: "i" })).not.toThrow();
   });
 
   it("passes when source has no tokens and the map is empty", () => {
@@ -25,25 +20,18 @@ describe("assertCoverage", () => {
   });
 
   it("fails map -> source: a map token no source consumes", () => {
-    const sources = ["only {{wake}} here"];
-    expect(() =>
-      assertCoverage(sources, { wake: "w", helper: "/h" }),
-    ).toThrow(TokenNotConsumedError);
+    expect(() => assertCoverage(["no tokens here"], { invoke: "i" })).toThrow(
+      TokenNotConsumedError,
+    );
   });
 
   it("fails source -> map: a source placeholder the map does not define", () => {
-    const sources = ["{{wake}} and {{helper}}"];
-    expect(() => assertCoverage(sources, { wake: "w" })).toThrow(
-      UncoveredPlaceholderError,
-    );
+    expect(() => assertCoverage(["{{invoke}}"], {})).toThrow(UncoveredPlaceholderError);
   });
 
   it("fails source -> map on an unknown placeholder spelling", () => {
-    // Map is empty so the only failure is the source placeholder `{{wak}}`, which
-    // is not a known token and is not in the map.
-    const sources = ["a typo: {{wak}}"];
-    expect(() => assertCoverage(sources, {})).toThrow(
-      UncoveredPlaceholderError,
-    );
+    // Map is empty so the only failure is the source placeholder `{{invok}}`,
+    // which is not a known token and is not in the map.
+    expect(() => assertCoverage(["a typo: {{invok}}"], {})).toThrow(UncoveredPlaceholderError);
   });
 });

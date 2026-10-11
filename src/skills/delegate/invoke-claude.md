@@ -1,14 +1,11 @@
-The helper is a CLI invoked over bash by absolute path:
+Use the `subagent` tool for all delegation commands. Pass `command` and the relevant `options`:
 
-```
-{{helper}} spawn --kind <pi|claude> [--agent <name>] --label "<title>" [--model <model>] [--body "<supervisor-agent>… your task …</supervisor-agent>" | --body-file <path>] [--worktree [--branch <name>] [--base <ref>]]
-{{helper}} prompt <pane_id> (--body "<supervisor-agent>… your task …</supervisor-agent>" | --body-file <path>)
-{{helper}} wait <pane_id> [--timeout <ms>]
-{{helper}} collect <pane_id>
-{{helper}} close <tab_id>
-{{helper}} list
-{{helper}} read <pane_id> [--lines <n>]
-{{helper}} unblock <pane_id> --keys "<key> [key ...]"
-```
-
-The interface above is your complete surface. In a genuine emergency, `herdr --help` lists herdr's raw commands; prefer handing the pane to the human over running herdr yourself.
+| command  | options                                           |
+| -------- | ------------------------------------------------- |
+| spawn    | `{ kind, agent?, label, model?, body?, body_file?, worktree?, branch?, base? }` |
+| prompt   | `{ pane_id, body | body_file }`                               |
+| collect  | `{ pane_id }`                                     |
+| close    | `{ tab_id }`                                      |
+| list     | `{}`                                              |
+| read     | `{ pane_id, lines? }`                             |
+| unblock  | `{ pane_id, keys }`                               |
