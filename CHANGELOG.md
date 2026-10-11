@@ -1,3 +1,10 @@
+# [0.11.0](https://github.com/asermax/herdr-subagents/compare/v0.10.0...v0.11.0) (2026-10-11)
+
+
+### Features
+
+* ship the claude plugin as a mod with the subagent tool ([bb9e96f](https://github.com/asermax/herdr-subagents/commit/bb9e96f9ead9ee48bacc313a636ae2d5f630b005))
+
 # [0.10.0](https://github.com/asermax/herdr-subagents/compare/v0.9.4...v0.10.0) (2026-09-20)
 
 
