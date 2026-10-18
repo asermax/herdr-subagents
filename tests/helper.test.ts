@@ -3,7 +3,7 @@ import { rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectChild } from "../src/helper/collect.js";
-import { spawnChild, type SpawnFailure } from "../src/helper/spawn.js";
+import { candidateAgentName, spawnChild, type SpawnFailure } from "../src/helper/spawn.js";
 
 async function expectFail<T>(p: Promise<T>): Promise<SpawnFailure> {
   try {
@@ -91,6 +91,44 @@ describe("spawn tab creation", () => {
     expect(createCall.args.label).toBe("do the thing");
     expect(createCall.args.env).toEqual({ HERDR_SUBAGENT: "1" });
     expect(result.pane_id).toBe("w1Z:p1");
+  });
+});
+
+// --- spawn: agent name collisions ---------------------------------------
+// herdr agent names are unique server-wide, so two children of the same role
+// cannot share the role's name.
+
+describe("spawn agent name collisions", () => {
+  it("starts a second child of the same role under a suffixed name", async () => {
+    const client = new FakeHerdrClient({
+      socketPath: server.socketPath,
+      snapshots: { "w1Z:p1": makeSnapshot({ name: "doer-2" }) },
+      startResult: {
+        doer: { error: { code: "agent_name_taken", message: "agent name doer is already used" } },
+      },
+    });
+    const registry = makeRegistry(client);
+
+    const result = await spawnChild(defaultSpawnInput(), { client, tracking: registry });
+
+    const starts = client.calls.filter((c) => c.method === "agent.start");
+    expect(starts.map((c) => c.args.name)).toEqual(["doer", "doer-2"]);
+    expect(starts[1]!.args.args).toEqual(["--agent", "doer"]);
+
+    expect(client.calls.filter((c) => c.method === "agent.rename")).toHaveLength(0);
+    expect(client.calls.filter((c) => c.method === "tab.close")).toHaveLength(0);
+
+    const entry = await registry.get(result.pane_id);
+    expect(entry?.agent).toBe("doer");
+    expect(entry?.agent_name).toBe("doer-2");
+  });
+
+  it("keeps a suffixed name within herdr's 32-char cap", () => {
+    const base = "a".repeat(32);
+
+    expect(candidateAgentName(base, 0)).toBe(base);
+    expect(candidateAgentName(base, 1)).toBe(`${"a".repeat(30)}-2`);
+    expect(candidateAgentName(base, 11)).toHaveLength(32);
   });
 });
 

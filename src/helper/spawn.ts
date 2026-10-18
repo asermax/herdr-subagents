@@ -7,6 +7,7 @@ import { readScreen } from "./screen.js";
 // evidence a child is spawned and addressable. One observed failure drives
 // the repair step:
 //   - agent name lost on 2 of 4 spawns -> verify-and-rename
+//   - agent name already held by a sibling -> start under the next free name
 // Prompt delivery verification lives in prompt.ts: spawnChild only creates +
 // starts a child (cli.ts composes the two when spawn is given --body).
 
@@ -24,6 +25,19 @@ export function slugifyAgentName(label: string): string {
   if (slug.length > 32) slug = slug.slice(0, 32).replace(/-+$/, "");
   return slug || "agent";
 }
+
+// herdr agent names are unique across the whole server, so a second child of
+// the same role cannot take the role's name. The first child keeps the bare
+// name; siblings get a numeric suffix, trimmed to stay within the 32-char cap.
+export function candidateAgentName(base: string, attempt: number): string {
+  if (attempt === 0) return base;
+
+  const suffix = `-${attempt + 1}`;
+  return `${base.slice(0, 32 - suffix.length).replace(/-+$/, "")}${suffix}`;
+}
+
+// How many suffixed names to try before giving up on a free one.
+const MAX_NAME_CANDIDATES = 50;
 
 // The prefix for child-facing env the parent forwards down (dev loop).
 // The gate itself is the bare HERDR_SUBAGENT; related signals use this prefix
@@ -218,21 +232,23 @@ export async function spawnChild(
   // precede the (multi-second) agent-start/verify sequence so the event-driven
   // watch, on pane.created → reconcile, finds the child already tracked and
   // opens its status subscription. On any later failure the entry is removed.
+  const effectiveAgent = input.agentName ?? slugifyAgentName(input.label);
+  const entry: RegistryEntry = {
+    pane_id: paneId,
+    tab_id: tabId,
+    workspace_id: workspaceId,
+    label: input.label,
+    agent: effectiveAgent,
+    kind: input.kind,
+    agent_name: effectiveAgent,
+    status: "idle",
+    spawned_at: Date.now(),
+    ...(resolved ? { worktree: toChildWorktree(resolved) } : {}),
+  };
+
   if (deps.tracking) {
-    const effectiveAgent = input.agentName ?? slugifyAgentName(input.label);
     try {
-      await deps.tracking.add({
-        pane_id: paneId,
-        tab_id: tabId,
-        workspace_id: workspaceId,
-        label: input.label,
-        agent: effectiveAgent,
-        kind: input.kind,
-        agent_name: effectiveAgent,
-        status: "idle",
-        spawned_at: Date.now(),
-        ...(resolved ? { worktree: toChildWorktree(resolved) } : {}),
-      });
+      await deps.tracking.add(entry);
     } catch {
       // A registry write failure must not block the spawn; the watch's safety
       // reconcile + `helper list` keep the fleet honest.
@@ -247,7 +263,16 @@ export async function spawnChild(
     // 2. Start the harness with the chosen kind and agent name. A readiness
     //    timeout = not installed or failed to start; distinguish from a fast
     //    post-start failure (started + exited — unresolvable name on claude).
-    const readiness = await startWithReadiness(client, paneId, input, bounds);
+    const { name, readiness } = await startWithReadiness(client, paneId, input, effectiveAgent, bounds);
+
+    if (name !== effectiveAgent && deps.tracking) {
+      try {
+        await deps.tracking.add({ ...entry, agent_name: name });
+      } catch {
+        // best-effort, as above
+      }
+    }
+
     if (!readiness.ok) {
       if (readiness.reason === "timeout") {
         throw fail(
@@ -286,7 +311,7 @@ export async function spawnChild(
     //    2-of-4 case. A generic spawn (no --agent) runs the harness default
     //    agent, whose reported name never matches — skip the verify entirely.
     if (input.agentName !== undefined) {
-      await verifyAndRename(client, paneId, input.agentName, bounds);
+      await verifyAndRename(client, paneId, name, bounds);
     }
 
     return {
@@ -330,50 +355,71 @@ export async function spawnChild(
   }
 }
 
-// Step 2: start the harness and classify the readiness outcome.
+// Step 2: start the harness and classify the readiness outcome. A name held by
+// another agent is rejected before the harness launches, so the start is
+// retried under the next candidate name; the name that landed is returned.
 async function startWithReadiness(
   client: HerdrClient,
   paneId: string,
   input: SpawnInput,
+  baseName: string,
   bounds: SpawnBounds,
-): Promise<ReadinessResult> {
-  try {
-    // With --agent, name the child and pass --agent so it runs that role.
-    // Without, omit --agent so the child runs the harness default agent; the
-    // label is the tracking name herdr records (AgentStartParams.name is
-    // required). --model rides after --agent so both land before the
-    // forwarded dev-loop flags.
-    const agentName = input.agentName;
-    const args = [
-      ...(agentName !== undefined ? ["--agent", agentName] : []),
-      ...(input.model !== undefined ? ["--model", input.model] : []),
-      ...(input.passThroughArgs ?? []),
-    ];
-    const agent = await client.agentStart({
-      name: agentName ?? slugifyAgentName(input.label),
-      kind: input.kind,
-      paneId,
-      timeoutMs: bounds.readinessTimeoutMs,
-      args,
-    });
-    return { ok: true, agent };
-  } catch (e) {
-    if (e instanceof HerdrError) {
-      if (e.code === "agent_start_timeout" || e.code === "timeout") {
-        return { ok: false, reason: "timeout" };
-      }
-      // `agent_not_ready` is herdr reporting a detected agent that is blocked
-      // during startup — it keeps the name and the pane. Treating it as a
-      // fast-fail would report a live child as exited and then kill it.
-      if (e.code === "agent_not_ready") {
-        return { ok: false, reason: "blocked", message: e.message };
-      }
-      // Fast post-start failure: the harness started and exited, or the kind
-      // is not installed. Anything else reads as fast-fail.
-      return { ok: false, reason: "fast-fail", message: e.message };
+): Promise<{ name: string; readiness: ReadinessResult }> {
+  // With --agent, pass --agent so the child runs that role. Without, omit it
+  // so the child runs the harness default agent; the label slug is the
+  // tracking name herdr records (AgentStartParams.name is required). --model
+  // rides after --agent so both land before the forwarded dev-loop flags.
+  const args = [
+    ...(input.agentName !== undefined ? ["--agent", input.agentName] : []),
+    ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...(input.passThroughArgs ?? []),
+  ];
+
+  for (let attempt = 0; attempt < MAX_NAME_CANDIDATES; attempt++) {
+    const name = candidateAgentName(baseName, attempt);
+
+    try {
+      const agent = await client.agentStart({
+        name,
+        kind: input.kind,
+        paneId,
+        timeoutMs: bounds.readinessTimeoutMs,
+        args,
+      });
+      return { name, readiness: { ok: true, agent } };
+    } catch (e) {
+      if (e instanceof HerdrError && e.code === "agent_name_taken") continue;
+
+      return { name, readiness: classifyStartError(e) };
     }
-    return { ok: false, reason: "fast-fail", message: e instanceof Error ? e.message : String(e) };
   }
+
+  return {
+    name: baseName,
+    readiness: {
+      ok: false,
+      reason: "fast-fail",
+      message: `no free agent name for ${baseName} after ${MAX_NAME_CANDIDATES} attempts`,
+    },
+  };
+}
+
+function classifyStartError(e: unknown): ReadinessResult {
+  if (e instanceof HerdrError) {
+    if (e.code === "agent_start_timeout" || e.code === "timeout") {
+      return { ok: false, reason: "timeout" };
+    }
+    // `agent_not_ready` is herdr reporting a detected agent that is blocked
+    // during startup — it keeps the name and the pane. Treating it as a
+    // fast-fail would report a live child as exited and then kill it.
+    if (e.code === "agent_not_ready") {
+      return { ok: false, reason: "blocked", message: e.message };
+    }
+    // Fast post-start failure: the harness started and exited, or the kind
+    // is not installed. Anything else reads as fast-fail.
+    return { ok: false, reason: "fast-fail", message: e.message };
+  }
+  return { ok: false, reason: "fast-fail", message: e instanceof Error ? e.message : String(e) };
 }
 
 // Watch a startup-blocked pane for a move to any non-blocked state. Any wait
