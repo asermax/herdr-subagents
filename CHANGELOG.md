@@ -1,3 +1,10 @@
+## [0.11.1](https://github.com/asermax/herdr-subagents/compare/v0.11.0...v0.11.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* allow multiple children with the same agent role ([e1485e3](https://github.com/asermax/herdr-subagents/commit/e1485e331ccd0b43174205fae171d59020d44501))
+
 # [0.11.0](https://github.com/asermax/herdr-subagents/compare/v0.10.0...v0.11.0) (2026-10-11)
 
 
