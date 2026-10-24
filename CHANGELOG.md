@@ -1,3 +1,10 @@
+## [0.11.2](https://github.com/asermax/herdr-subagents/compare/v0.11.1...v0.11.2) (2026-10-24)
+
+
+### Bug Fixes
+
+* surface harness startup errors on readiness timeout ([279728f](https://github.com/asermax/herdr-subagents/commit/279728fb848c59eb563c359fdb1dc07e665d9b71))
+
 ## [0.11.1](https://github.com/asermax/herdr-subagents/compare/v0.11.0...v0.11.1) (2026-10-18)
 
 
