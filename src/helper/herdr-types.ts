@@ -91,6 +91,7 @@ export interface HerdrClient {
   // system: what a blocked child is waiting on lives on its screen and nowhere
   // else (the session log does not carry an unanswered dialog).
   agentRead(target: string, opts: { lines: number }): Promise<string>;
+  paneRead(paneId: string, opts: { lines: number }): Promise<string>;
   // Key presses, not text. Answering a dialog is picking an option; sending a
   // prompt body is `agentPrompt`.
   agentSendKeys(target: string, keys: readonly string[]): Promise<void>;

@@ -22,3 +22,21 @@ export async function readScreen(
     return undefined;
   }
 }
+
+/**
+ * Read a pane's recent output, best-effort, without needing an agent on the
+ * pane — what a harness printed before exiting. Same failure discipline as
+ * readScreen: a failed read yields nothing rather than its own error.
+ */
+export async function readPaneOutput(
+  client: HerdrClient,
+  paneId: string,
+  lines = DEFAULT_SCREEN_LINES,
+): Promise<string | undefined> {
+  try {
+    const screen = await client.paneRead(paneId, { lines });
+    return screen.trim() === "" ? undefined : screen;
+  } catch {
+    return undefined;
+  }
+}

@@ -259,6 +259,17 @@ export class RealHerdrClient implements HerdrClient {
     await herdr<{ type: string }>("agent", "send-keys", target, ...keys);
   }
 
+  // `pane read` prints the pane's recent output as plain text. Unlike `agent
+  // read` it needs no agent on the pane, so it is the one that can read what a
+  // harness printed before exiting.
+  async paneRead(paneId: string, opts: { lines: number }): Promise<string> {
+    const { stdout, stderr, code } = await runCli(["pane", "read", paneId, "--lines", String(opts.lines)]);
+    if (code !== 0) {
+      throw new HerdrError("pane_read_failed", stderr.trim().split("\n")[0] || `exit ${code}`, stderr);
+    }
+    return stdout;
+  }
+
   async worktreeList(opts: { workspaceId?: string; cwd?: string }): Promise<WorktreeInfo[]> {
     const args = ["worktree", "list"];
     if (opts.workspaceId) args.push("--workspace", opts.workspaceId);

@@ -134,6 +134,11 @@ export class FakeHerdrClient implements HerdrClient {
     return this.opts.screens?.[target] ?? "";
   }
 
+  async paneRead(paneId: string, opts: { lines: number }): Promise<string> {
+    this.calls.push({ method: "pane.read", args: { target: paneId, ...opts } });
+    return this.opts.screens?.[paneId] ?? "";
+  }
+
   async agentSendKeys(target: string, keys: readonly string[]): Promise<void> {
     this.calls.push({ method: "agent.send-keys", args: { target, keys: [...keys] } });
   }

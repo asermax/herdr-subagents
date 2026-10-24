@@ -1,7 +1,7 @@
 import type { AgentStatus, HerdrClient, ReadinessResult, WorktreeInfo } from "./herdr-types.js";
 import { HerdrError } from "./herdr-types.js";
 import type { RegistryEntry } from "./registry.js";
-import { readScreen } from "./screen.js";
+import { DEFAULT_SCREEN_LINES, readPaneOutput, readScreen } from "./screen.js";
 
 // spawn is a verify-and-repair sequence. Success from `agent start` is NOT
 // evidence a child is spawned and addressable. One observed failure drives
@@ -141,8 +141,9 @@ export interface SpawnFailure {
   // The half-created pane id, surfaced to the human if it cannot be cleaned up.
   pane_id?: string;
   tab_id?: string;
-  // What the child is waiting on, on a `blocked` failure. The pane is still
-  // open, so this is the parent's evidence for which keys answer the dialog.
+  // What the pane showed, on a `blocked` failure (the dialog the child waits
+  // on, so the parent has evidence for which keys answer it) and on a
+  // `timeout` (the startup error the harness printed before exiting).
   screen?: string;
 }
 
@@ -275,10 +276,19 @@ export async function spawnChild(
 
     if (!readiness.ok) {
       if (readiness.reason === "timeout") {
-        throw fail(
+        // The pane holds the evidence of why: a harness that exited on a
+        // startup error (an invalid --model, a missing dependency) prints it
+        // there. Read it before the catch below closes the tab, so the parent
+        // sees the harness's own error instead of guessing at "not installed".
+        // `pane read`, not `agent read`: once the harness exited there is no
+        // agent on the pane to read through.
+        const screen = await readPaneOutput(client, paneId, DEFAULT_SCREEN_LINES);
+        const failure = fail(
           "timeout",
           `harness never became ready within ${bounds.readinessTimeoutMs}ms — not installed or failed to start`,
         );
+        if (screen !== undefined) failure.screen = screen;
+        throw failure;
       }
       // A child blocked during startup is running, detected, and named — it is
       // sitting on a dialog (a trust prompt, an approval). Give it the startup

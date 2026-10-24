@@ -376,6 +376,31 @@ describe("spawn readiness classification", () => {
     expect((await registry.list()).map((c) => c.pane_id)).toEqual(["w1Z:p1"]);
   });
 
+  it("carries the pane's screen on a readiness timeout, so a harness startup error reaches the parent", async () => {
+    const client = new FakeHerdrClient({
+      socketPath: server.socketPath,
+      screens: {
+        "w1Z:p1":
+          '❯ pi --model glm-5.3-flash\nError: Model "glm-5.3-flash" is ambiguous across providers. Use --provider or provider/model.\n',
+      },
+    });
+    client.opts.startResult = {
+      doer: { error: { code: "agent_start_timeout", message: "never ready" } },
+    };
+
+    const failure = await expectFail(
+      spawnChild(defaultSpawnInput(), { client, bounds: { readinessTimeoutMs: 50 } }),
+    );
+
+    expect(failure.reason).toBe("timeout");
+    expect(failure.screen).toMatch(/ambiguous across providers/);
+    // The timeout path reads the pane directly: once the harness exited there
+    // is no agent on the pane to read through.
+    expect(client.calls.find((c) => c.method === "agent.read")).toBeUndefined();
+    const read = client.calls.find((c) => c.method === "pane.read");
+    expect(read?.args).toMatchObject({ target: "w1Z:p1" });
+  });
+
   it("closes the half-created tab on a readiness failure", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
     client.opts.startResult = {
