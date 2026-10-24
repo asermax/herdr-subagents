@@ -49,7 +49,8 @@ export interface SubagentOptions {
 export const OPTION_DESCRIPTIONS = {
   agent: "Agent name — the definition's system prompt is applied automatically (never a path)",
   label: "Tab label",
-  model: "Model the child's harness runs; omitted, the harness default (spawn only)",
+  model:
+    "Model the child's harness runs; qualify as provider/model when the bare id exists on several providers; omitted, the harness default (spawn only)",
   body: "Prompt body wrapped in <supervisor-agent> — the initial prompt on spawn, the message on prompt",
   body_file:
     "Path to a file whose content is the prompt body — alternative to body (absolute, or relative to the cwd)",
