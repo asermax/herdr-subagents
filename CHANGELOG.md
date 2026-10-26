@@ -1,3 +1,10 @@
+## [0.11.3](https://github.com/asermax/herdr-subagents/compare/v0.11.2...v0.11.3) (2026-10-26)
+
+
+### Bug Fixes
+
+* settle before the spawn body so an editor swap cannot eat the paste ([f280132](https://github.com/asermax/herdr-subagents/commit/f2801321ed7a2a8499714d71c26c05951abd33cf)), closes [#N](https://github.com/asermax/herdr-subagents/issues/N)
+
 ## [0.11.2](https://github.com/asermax/herdr-subagents/compare/v0.11.1...v0.11.2) (2026-10-24)
 
 
