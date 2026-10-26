@@ -1,0 +1,127 @@
+---
+name: delegate
+description: Delegate work by spawning another agent as a herdr tab.
+---
+# The herdr-subagents protocol
+
+What you follow as a parent agent driving herdr subagents. You drive every exchange: you prompt, your children reply.
+
+## Your prompts — `<supervisor-agent>`
+
+Wrap every prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. The tag is how the child tells your directive from a human steering it directly — an untagged message reaching the child means a human has taken over that tab.
+
+## Your child's questions — `<subagent-ask>`
+
+A child that needs a decision ends its turn with the question wrapped in `<subagent-ask>…</subagent-ask>`. When you collect, that tag is your discriminator: present means the child is asking you something (reply, and do not close the tab); absent means the message is the child's result.
+
+## Invoking delegation
+
+The delegate skill is invoked as `/skill:delegate` on pi and `/delegate` on claude. A child invokes it on its own harness. If you direct a cross-harness child to delegate, name the form for its harness in your prompt.
+
+When a message carries a skill invocation (any `/skill:...` or `/...` command), it comes **first, outside the `<supervisor-agent>` tag** — it is a harness command, not part of the tagged payload. The command and the opening tag share the first line, space-separated: `/skill:implement <supervisor-agent>...`. This holds for every skill, not only delegation: a parent directing a child to run `/skill:implement`, `/skill:tdd`, or any other skill prefixes the command before the tag on the same line.
+
+---
+
+# Delegate
+
+You drive subagents through a single interface that wraps herdr. It handles the fragile parts — verifying the spawn landed, confirming the prompt was delivered, tracking pane and tab ids — so you treat each command as trustworthy and act on what it reports.
+
+Use the `subagent` tool for all delegation commands. Pass `command` and the relevant `options`:
+
+| command  | options                                           |
+| -------- | ------------------------------------------------- |
+| spawn    | `{ kind, agent?, label, model?, body?, body_file?, worktree?, branch?, base? }` |
+| prompt   | `{ pane_id, body | body_file }`                               |
+| collect  | `{ pane_id }`                                     |
+| close    | `{ tab_id }`                                      |
+| list     | `{}`                                              |
+| read     | `{ pane_id, lines? }`                             |
+| unblock  | `{ pane_id, keys }`                               |
+
+All children are herdr tabs. One tab, one task. A child lives in your workspace unless you give it a worktree, which puts it in a workspace of its own.
+
+## When to delegate
+
+Delegate when the work is genuinely separable and worth a tab of its own. Prefer breadth — several children at your own level — over deep chains. Close your children before spawning the next batch.
+
+Label each tab after the work it is doing; a workspace of labelled tabs is your fleet view.
+
+## Spawn
+
+- `kind` is required and never self-detected. Your default is your own harness; pass the other only when the work or the caller explicitly asks for it. Only `pi` and `claude` are supported.
+- `agent` is optional. Omit it to dispatch a generic child running the harness's default agent (it still receives the herdr onboarding). When given, it is a name defined in the project's agent files, never a path — and the name is all you provide: the child's system prompt is applied from the definition at spawn, so never paste the definition into the prompt nor direct the child to read it.
+- `model` is optional. Omitted, the child runs its harness's default model. It is a model name of the child's harness, passed through verbatim, so what is valid depends on `kind`. A bare id that more than one provider carries is ambiguous — pi exits on it and the spawn fails — so qualify it with the provider, such as `zai/glm-5.3-flash`. When you spawn without a model named by the work or the caller, pick one yourself: judge the task's difficulty and choose the cheapest model available that can solve it. Reach for a heavier model only when the work needs the capability — mechanical tasks never do.
+- `body` is optional. Given, the task is delivered with the spawn — one call instead of spawn-then-prompt. Wrap it in `<supervisor-agent>…</supervisor-agent>` exactly as you would with `prompt`; delivery is verified the same way. Every message after it goes through `prompt`. Pass it as text, or through `body_file` with a path to a file whose content is exactly the body (absolute, or relative to the cwd).
+- The label is final; a child never renames its own tab.
+
+Returns the new child's `pane_id` and `tab_id`. Keep both — you prompt and collect by `pane_id`, and close by `tab_id`. If spawn fails, the half-created tab is closed and the failure is reported; surface that to the human rather than retrying blindly. Two failures are different: `blocked` means the child came up on a startup dialog and never became ready. It is alive, so its tab is kept and its pane comes back with the dialog on it — see **Blocked children**. And a spawn with `body` can fail at delivery: the child is alive and tracked, and the failure names its `pane_id` — retry with `prompt`.
+
+## Worktrees
+
+`worktree` gives a child its own checkout on its own branch, in its own herdr workspace, instead of sharing your working directory.
+
+Use it when the child will **write** — implementing, refactoring, fixing a bug — and above all when several children write at once. Sharing one checkout means they overwrite each other's edits and fight over the same branch.
+
+It is not the default. Research, planning, design, review — anything answered by reading — belongs in your own checkout, where the child sees the code you actually have and leaves nothing behind. A single child making changes is usually fine without one too; isolation pays off when there is something to isolate from.
+
+- `branch` names the branch. A new name creates a worktree; an existing one joins it.
+- `base` is what a new branch forks from. Omitted, your current HEAD.
+- Nothing else changes. You prompt, collect, and close a worktree child exactly like any other.
+
+Several children can share one worktree. Point a second child at an existing branch and it lands in the same checkout alongside the first — that is how you put a reviewer on another child's work, or hand a branch from one child to the next. Children sharing a checkout see each other's edits, so give them non-overlapping work, or run them one after another.
+
+Close children as you always do. A worktree outlives its children until the last one goes, and closing that last child takes the checkout with it — so a sibling still working there is never disturbed. The branch always survives: name it when you report a child's result, or the work is lost to whoever reads the report.
+
+Uncommitted changes are never discarded. If the last child's checkout is dirty, the close reports that and the child stays open — prompt it to commit, then close it again.
+
+## Prompt
+
+Wrap **every** prompt you send to a child in `<supervisor-agent>…</supervisor-agent>`. Tagging is what tells the child it is a supervisor directive rather than a human steering it. The first prompt can ride `spawn`'s `body`; `prompt` is for every message after it. Either takes the body as text or through a file path (`body_file`); the file's content is exactly the body, tag included.
+
+Delivery is verified: the interface watches for the child to act on the prompt and resends if the first send is dropped. A child that is already `working` receives the prompt as a steer — no state change follows a steer, so the accepted submission itself is the receipt and the message is never resent.
+
+When a child needs you, your session wakes you automatically, so you never arm a wake yourself: a finished turn (`done`, or an `idle` that ends a turn) wakes you to collect, `blocked` wakes you to surface the dialog to the human, the resume from a block wakes you so you know they answered, and a lost child (`gone`) wakes you too.
+
+## Blocked children
+
+`blocked` is herdr recognising a dialog on a child's screen — a tool approval, a question it opened instead of asking you, a startup trust prompt. It is neither terminal nor a failure: the child is alive and one keypress from carrying on. It is also the state most in need of you, because unlike a finished turn it will never resolve on its own.
+
+A blocked child wakes you. What you do with it:
+
+- `read` its pane to see what is being asked. This is the one screen read in the interface; it is for a blocked child, not for checking progress.
+- **Tell the human what it needs and which tab to answer it in** — name the tab label and the pane id. The answer is theirs to give, not yours: you cannot know whether a permission prompt should be granted, and a question the child asked is a question for a person.
+- You are woken again when the child resumes, so you can carry on without watching the tab.
+
+`unblock` sends key presses (`enter`, `esc`, `1 enter`) and reports whether the block cleared. Use it **only when the human has explicitly told you to answer that dialog** — "yes, accept it" is your authorization, and it saves them a tab switch. Never on your own judgement, and never as a way to keep a child moving. It refuses a child that is not blocked: keys sent to an idle child are typed into its prompt box and corrupt its next prompt.
+
+A child that asks through a dialog rather than `<subagent-ask>` has misrouted its question — surface it, and prompt it to use the tag next time. Whoever answers a dialog, the child cannot tell you from the human.
+
+## Collect
+
+When a child finishes, you are woken to collect it.
+
+Returns `{pane_id, label, agent, status, message?, error?}`. `status` reflects herdr's state, **not** task success — a child that gives up still reaches `done`. Read `message` and judge the result yourself.
+
+The `<subagent-ask>…</subagent-ask>` tag in the child's final message marks a question for you rather than a result.
+
+`blocked` is non-terminal: the child is waiting, not finished. See **Blocked children**.
+
+Once you no longer need a child, you can close it.
+
+## Close
+
+Close a child once you have its result and no longer need it. Closing before spawning the next batch keeps the fleet clean. The timing is a delegation question, not a results question: keep a child open because a fix round is coming, close it when nothing more will be delegated to it.
+
+## The fleet
+
+Run `list` to see every tracked child and its status. A wake can be missed; `list` is the durable backstop you run on demand, so a missed wake is never fatal. Run it whenever you are unsure what is outstanding.
+
+A child that stalls has no automatic timeout. Surface it to the human as a fleet item — do not kill it.
+
+## Inspection (discouraged)
+
+The interface is your complete surface. If it reports something you cannot act on, surface the pane to the human rather than reaching past it.
+
+## Nesting
+
+A child you spawn can delegate further by invoking the delegate skill on its own harness; nesting works to any depth. The judgement above — breadth over chains, close before the next batch — applies at every level.
