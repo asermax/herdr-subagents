@@ -233,6 +233,9 @@ describe("CLI spawn/prompt --body", () => {
       HERDR_WORKSPACE_ID: "wS",
       HERDR_REGISTRY_PATH: join(tmpDir, "registry.json"),
       STUB_STATE: join(tmpDir, "state.json"),
+      // The spawn settle exists to outlast a real harness's editor swap; the
+      // stub child has none, so the default 3s would only slow every test.
+      HERDR_SUBAGENT_SETTLE_MS: "0",
     };
   });
 
@@ -271,6 +274,33 @@ describe("CLI spawn/prompt --body", () => {
     const entry = readEntry();
     expect(entry.acked_seq).toBe(6);
     expect(entry.acked_status).toBe("working");
+  });
+
+  it("settles before delivering the spawn --body, so a startup editor swap cannot eat the paste", async () => {
+    // A paste delivered into a harness whose extensions are still loading can
+    // land in a pre-swap editor and arrive as a bare paste marker (the pi-vim
+    // session_start swap). The spawn path must wait out that window: with a
+    // 300ms settle, delivery cannot complete in under 300ms. setTimeout never
+    // fires early, so the lower bound is race-free.
+    server.script([{ paneId: "wS:p1", status: "working", seq: 7 } as ScriptedEvent]);
+    const startedAt = Date.now();
+    const { code, stdout } = await runCli(
+      [
+        "spawn",
+        "--kind",
+        "pi",
+        "--agent",
+        "doer",
+        "--label",
+        "x",
+        "--body",
+        "<supervisor-agent>do it</supervisor-agent>",
+      ],
+      { ...stubEnv, HERDR_SUBAGENT_SETTLE_MS: "300" },
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.trim()).prompt).toEqual({ sent: true, status: "working" });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300);
   });
 
   it("delivers the initial prompt from --body-file", async () => {

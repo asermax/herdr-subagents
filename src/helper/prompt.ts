@@ -25,6 +25,25 @@ export const DEFAULT_PROMPT_BOUNDS: PromptBounds = {
   deliveryStallMs: 5_000,
 };
 
+// How long the spawn path waits after readiness before delivering the first
+// --body. A freshly-started harness keeps loading extensions for another
+// second or two after it reports interactive-ready, and an extension can swap
+// the input editor mid-load (pi-vim does, at session_start). A large paste
+// delivered into the pre-swap editor exists there only as a `[paste #N +M
+// lines]` marker over privately-stored content, and the swap copies the marker
+// across as plain text — the child then answers the marker with no task. The
+// swap happens exactly once, early; waiting it out before the FIRST prompt
+// closes the window. Later `prompt`s hit a long-settled session and need no
+// delay. Overridable (0 disables) so tests and the dev loop skip the wait.
+export const DEFAULT_FIRST_PROMPT_SETTLE_MS = 3_000;
+
+export function firstPromptSettleMs(): number {
+  const raw = process.env.HERDR_SUBAGENT_SETTLE_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_FIRST_PROMPT_SETTLE_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_FIRST_PROMPT_SETTLE_MS;
+}
+
 // Where the child stands once delivery is confirmed. The caller acks a sequence from this so a
 // later `wait` knows which transitions are new (ADR-0008): the receipt's own
 // seq when the child moved to `working`, and the pre-send seq when the child

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { deliverPrompt } from "../src/helper/prompt.js";
+import { DEFAULT_FIRST_PROMPT_SETTLE_MS, deliverPrompt, firstPromptSettleMs } from "../src/helper/prompt.js";
 import type { SpawnFailure } from "../src/helper/spawn.js";
 import type { AgentSnapshot } from "../src/helper/herdr-types.js";
 import { FakeHerdrClient } from "./fake-client.js";
@@ -150,5 +150,36 @@ describe("prompt verify-delivery", () => {
     expect(failure.screen).toBe("Error: model overloaded");
     const prompts = client.calls.filter((c) => c.method === "agent.prompt");
     expect(prompts).toHaveLength(2);
+  });
+});
+
+describe("first prompt settle", () => {
+  const inherited = process.env.HERDR_SUBAGENT_SETTLE_MS;
+
+  afterEach(() => {
+    if (inherited === undefined) delete process.env.HERDR_SUBAGENT_SETTLE_MS;
+    else process.env.HERDR_SUBAGENT_SETTLE_MS = inherited;
+  });
+
+  it("defaults to the startup settle window", () => {
+    delete process.env.HERDR_SUBAGENT_SETTLE_MS;
+    expect(firstPromptSettleMs()).toBe(DEFAULT_FIRST_PROMPT_SETTLE_MS);
+  });
+
+  it("an explicit 0 disables the wait for tests and the dev loop", () => {
+    process.env.HERDR_SUBAGENT_SETTLE_MS = "0";
+    expect(firstPromptSettleMs()).toBe(0);
+  });
+
+  it("an explicit value overrides the window", () => {
+    process.env.HERDR_SUBAGENT_SETTLE_MS = "1200";
+    expect(firstPromptSettleMs()).toBe(1200);
+  });
+
+  it("a non-numeric or negative override falls back to the default rather than skipping the wait", () => {
+    for (const bad of ["soon", "-1"]) {
+      process.env.HERDR_SUBAGENT_SETTLE_MS = bad;
+      expect(firstPromptSettleMs()).toBe(DEFAULT_FIRST_PROMPT_SETTLE_MS);
+    }
   });
 });

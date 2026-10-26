@@ -8,7 +8,7 @@ import { closeChild } from "./close.js";
 import { collectChild, waitChild, type CollectDeps } from "./collect.js";
 import { clientFromEnv, currentWorkspaceId } from "./herdr-client.js";
 import { HerdrError } from "./herdr-types.js";
-import { DEFAULT_PROMPT_BOUNDS, ackDelivery, deliverPrompt } from "./prompt.js";
+import { DEFAULT_PROMPT_BOUNDS, ackDelivery, deliverPrompt, firstPromptSettleMs } from "./prompt.js";
 import { fileRegistryStore, Registry } from "./registry.js";
 import { DEFAULT_SCREEN_LINES, readScreen } from "./screen.js";
 import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
@@ -225,6 +225,14 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
   if (body === undefined) {
     emit(result);
     return;
+  }
+
+  // Wait out the child's startup settle before the first paste: extension
+  // loading continues past readiness, and an editor swap inside the
+  // paste-to-submit window loses the body (see firstPromptSettleMs).
+  const settleMs = firstPromptSettleMs();
+  if (settleMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, settleMs));
   }
 
   // The initial --body rides the spawn: delivered and acked exactly as a
