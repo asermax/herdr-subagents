@@ -1,3 +1,10 @@
+# [0.12.0](https://github.com/asermax/herdr-subagents/compare/v0.11.3...v0.12.0) (2026-11-13)
+
+
+### Features
+
+* add effort option to spawn ([1980631](https://github.com/asermax/herdr-subagents/commit/198063155423af588ff3ec858ffc86224dfa4d71))
+
 ## [0.11.3](https://github.com/asermax/herdr-subagents/compare/v0.11.2...v0.11.3) (2026-10-26)
 
 
