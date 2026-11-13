@@ -35,6 +35,12 @@ describe("buildHelperArgs", () => {
     ).toEqual(["spawn", "--kind", "pi", "--label", "fix", "--model", "sonnet"]);
   });
 
+  it("spawn: effort rides after model", () => {
+    expect(
+      buildHelperArgs("spawn", { kind: "pi", label: "fix", model: "sonnet", effort: "low" }),
+    ).toEqual(["spawn", "--kind", "pi", "--label", "fix", "--model", "sonnet", "--effort", "low"]);
+  });
+
   it("spawn: body rides after model", () => {
     expect(
       buildHelperArgs("spawn", {

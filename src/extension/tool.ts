@@ -48,6 +48,7 @@ const subagentSchema = Type.Object({
     agent: Type.Optional(Type.String({ description: OPTION_DESCRIPTIONS.agent })),
     label: Type.Optional(Type.String({ description: OPTION_DESCRIPTIONS.label })),
     model: Type.Optional(Type.String({ description: OPTION_DESCRIPTIONS.model })),
+    effort: Type.Optional(Type.String({ description: OPTION_DESCRIPTIONS.effort })),
     body: Type.Optional(Type.String({ description: OPTION_DESCRIPTIONS.body })),
     body_file: Type.Optional(Type.String({ description: OPTION_DESCRIPTIONS.body_file })),
     worktree: Type.Optional(Type.Boolean({ description: OPTION_DESCRIPTIONS.worktree })),

@@ -195,6 +195,28 @@ describe("spawn dev-loop forwarding", () => {
     ]);
   });
 
+  it("maps effort to --thinking for a pi child, after --model", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
+
+    await spawnChild(defaultSpawnInput({ kind: "pi", model: "sonnet", effort: "minimal" }), {
+      client,
+    });
+
+    const startCall = client.calls.find((c) => c.method === "agent.start")!;
+    expect(startCall.args.args).toEqual(["--agent", "doer", "--model", "sonnet", "--thinking", "minimal"]);
+  });
+
+  it("maps effort to --effort for a claude child", async () => {
+    const client = new FakeHerdrClient({ socketPath: server.socketPath });
+    client.opts.snapshots = { "w1Z:p1": makeSnapshot() };
+
+    await spawnChild(defaultSpawnInput({ kind: "claude", effort: "high" }), { client });
+
+    const startCall = client.calls.find((c) => c.method === "agent.start")!;
+    expect(startCall.args.args).toEqual(["--agent", "doer", "--effort", "high"]);
+  });
+
   it("places --model on the argv for a generic child too", async () => {
     const client = new FakeHerdrClient({ socketPath: server.socketPath });
     client.opts.snapshots = { "w1Z:p1": makeSnapshot() };

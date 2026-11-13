@@ -110,6 +110,20 @@ describe("CLI --kind rejection", () => {
     expect(stderr).toMatch(/--branch and --base require --worktree/);
   });
 
+  it("rejects an effort level the child's harness does not take", async () => {
+    const { code, stderr } = await runCli([
+      "spawn",
+      "--kind",
+      "claude",
+      "--label",
+      "x",
+      "--effort",
+      "minimal",
+    ]);
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/--effort for a claude child must be one of low\|medium\|high\|xhigh\|max, got minimal/);
+  });
+
   it("rejects an unknown subcommand", async () => {
     const { code, stderr } = await runCli(["bogus"]);
     expect(code).toBe(2);

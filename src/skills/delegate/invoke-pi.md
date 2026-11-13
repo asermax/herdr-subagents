@@ -2,7 +2,7 @@ Use the `subagent` tool for all delegation commands. Pass `command` and the rele
 
 | command  | options                                           |
 | -------- | ------------------------------------------------- |
-| spawn    | `{ kind, agent?, label, model?, body?, body_file?, worktree?, branch?, base? }` |
+| spawn    | `{ kind, agent?, label, model?, effort?, body?, body_file?, worktree?, branch?, base? }` |
 | prompt   | `{ pane_id, body | body_file }`                               |
 | wait     | `{ pane_id, timeout? }`                           |
 | collect  | `{ pane_id }`                                     |

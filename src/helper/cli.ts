@@ -11,7 +11,7 @@ import { HerdrError } from "./herdr-types.js";
 import { DEFAULT_PROMPT_BOUNDS, ackDelivery, deliverPrompt, firstPromptSettleMs } from "./prompt.js";
 import { fileRegistryStore, Registry } from "./registry.js";
 import { DEFAULT_SCREEN_LINES, readScreen } from "./screen.js";
-import { isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
+import { EFFORT_LEVELS, isSpawnFailure, spawnChild, type SpawnResult } from "./spawn.js";
 import { isUnblockRefusal, unblockChild } from "./unblock.js";
 import { runWatch } from "./watch.js";
 
@@ -31,6 +31,7 @@ const SPAWN_OWN_FLAGS = new Set([
   "agent",
   "label",
   "model",
+  "effort",
   "body",
   "body-file",
   "cwd",
@@ -151,6 +152,7 @@ interface SpawnArgs {
   agent: string | undefined;
   label: string | undefined;
   model: string | undefined;
+  effort: string | undefined;
   body: string | undefined;
   bodyFile: string | undefined;
   cwd: string;
@@ -176,6 +178,11 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
 
   const label = args.label;
   if (!label) fail("--label is required", 2);
+
+  const levels: readonly string[] = EFFORT_LEVELS[kind];
+  if (args.effort !== undefined && !levels.includes(args.effort)) {
+    fail(`--effort for a ${kind} child must be one of ${levels.join("|")}, got ${args.effort}`, 2);
+  }
 
   // --branch/--base only mean something with a worktree. Silently ignoring them
   // would put the child in the parent's checkout while the caller believes it
@@ -208,6 +215,7 @@ async function runSpawn(args: SpawnArgs, rawArgs: string[]): Promise<void> {
         workspaceId,
         passThroughArgs: passthroughArgs(rawArgs),
         ...(args.model !== undefined ? { model: args.model } : {}),
+        ...(args.effort !== undefined ? { effort: args.effort } : {}),
         ...(worktree ? { worktree } : {}),
       },
       { client, tracking: registry },
@@ -425,6 +433,11 @@ const spawn = defineCommand({
     model: {
       type: "string",
       description: "Model the child's harness runs (a pi model id or claude alias)",
+    },
+    effort: {
+      type: "string",
+      description:
+        "Reasoning effort (pi: off|minimal|low|medium|high|xhigh|max; claude: low|medium|high|xhigh|max)",
     },
     body: {
       type: "string",

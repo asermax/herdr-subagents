@@ -68,6 +68,14 @@ export interface WorktreeRequest {
   base?: string;
 }
 
+// Each harness takes reasoning effort through its own flag and accepts its own
+// levels: pi's thinking levels include "off" and "minimal", claude's do not.
+export const EFFORT_FLAGS = { pi: "--thinking", claude: "--effort" } as const;
+export const EFFORT_LEVELS = {
+  pi: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+  claude: ["low", "medium", "high", "xhigh", "max"],
+} as const;
+
 export interface SpawnInput {
   kind: "pi" | "claude";
   // Omitted for a generic spawn: the child runs the harness's default agent
@@ -80,6 +88,9 @@ export interface SpawnInput {
   // Model name for the child's harness (--model on its start argv). Omitted,
   // the harness's default model runs.
   model?: string;
+  // Reasoning effort, one of EFFORT_LEVELS[kind]; mapped to the kind's flag in
+  // EFFORT_FLAGS. Omitted, the harness's default effort applies.
+  effort?: string;
   // Extra argv forwarded to the child's harness (e.g. --extension, --skill on
   // pi; --plugin-dir on claude). Empty in production. Computed by the
   // caller from the parent's own launch argv (cli.ts).
@@ -378,10 +389,12 @@ async function startWithReadiness(
   // With --agent, pass --agent so the child runs that role. Without, omit it
   // so the child runs the harness default agent; the label slug is the
   // tracking name herdr records (AgentStartParams.name is required). --model
-  // rides after --agent so both land before the forwarded dev-loop flags.
+  // and the effort flag ride after --agent so they land before the forwarded
+  // dev-loop flags.
   const args = [
     ...(input.agentName !== undefined ? ["--agent", input.agentName] : []),
     ...(input.model !== undefined ? ["--model", input.model] : []),
+    ...(input.effort !== undefined ? [EFFORT_FLAGS[input.kind], input.effort] : []),
     ...(input.passThroughArgs ?? []),
   ];
 

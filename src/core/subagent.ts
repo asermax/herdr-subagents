@@ -33,6 +33,7 @@ export interface SubagentOptions {
   agent?: string;
   label?: string;
   model?: string;
+  effort?: string;
   worktree?: boolean;
   branch?: string;
   base?: string;
@@ -51,6 +52,8 @@ export const OPTION_DESCRIPTIONS = {
   label: "Tab label",
   model:
     "Model the child's harness runs; qualify as provider/model when the bare id exists on several providers; omitted, the harness default (spawn only)",
+  effort:
+    "Reasoning effort of the child; pi takes off|minimal|low|medium|high|xhigh|max, claude takes low|medium|high|xhigh|max; omitted, the harness default (spawn only)",
   body: "Prompt body wrapped in <supervisor-agent> — the initial prompt on spawn, the message on prompt",
   body_file:
     "Path to a file whose content is the prompt body — alternative to body (absolute, or relative to the cwd)",
@@ -84,6 +87,7 @@ export function inputSchemaFor(harness: Harness): Record<string, unknown> {
           agent: string(OPTION_DESCRIPTIONS.agent),
           label: string(OPTION_DESCRIPTIONS.label),
           model: string(OPTION_DESCRIPTIONS.model),
+          effort: string(OPTION_DESCRIPTIONS.effort),
           body: string(OPTION_DESCRIPTIONS.body),
           body_file: string(OPTION_DESCRIPTIONS.body_file),
           worktree: boolean(OPTION_DESCRIPTIONS.worktree),
@@ -108,7 +112,7 @@ export function inputSchemaFor(harness: Harness): Record<string, unknown> {
  *
  * | command  | argv                                                    |
  * | -------- | ------------------------------------------------------- |
- * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--model <model>] [--body <body> | --body-file <path>] [--worktree [--branch <b>] [--base <r>]]` |
+ * | spawn    | `spawn --kind <kind> --label <label> [--agent <agent>] [--model <model>] [--effort <level>] [--body <body> | --body-file <path>] [--worktree [--branch <b>] [--base <r>]]` |
  * | prompt   | `prompt <pane_id> --body <body> | --body-file <path>`                        |
  * | wait     | `wait <pane_id> [--timeout <ms>]`                       |
  * | collect  | `collect <pane_id>`                                     |
@@ -125,6 +129,7 @@ export function buildHelperArgs(command: SubagentCommand, options: SubagentOptio
       if (options.agent) args.push("--agent", options.agent);
       if (options.label) args.push("--label", options.label);
       if (options.model) args.push("--model", options.model);
+      if (options.effort) args.push("--effort", options.effort);
       if (options.body) args.push("--body", options.body);
       if (options.body_file) args.push("--body-file", options.body_file);
       if (options.worktree) {
@@ -491,7 +496,7 @@ const SKILL_INVOCATION: Record<Harness, string> = {
 export function promptGuidelines(harness: Harness): string[] {
   return [
     "Use `subagent` to delegate separable work to a child agent running in its own herdr tab — one tab, one task.",
-    "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string, body?: string, body_file?: string, worktree?: boolean, branch?: string, base?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. Pass `body` (wrapped in `<supervisor-agent>…</supervisor-agent>`) to send the task in the same call, or `body_file` with a path to a file whose content is the body (absolute, or relative to the cwd). Returns `{ pane_id, tab_id }` — keep both.",
+    "`spawn`: options `{ kind: \"pi\"|\"claude\", label: string, agent?: string, model?: string, effort?: string, body?: string, body_file?: string, worktree?: boolean, branch?: string, base?: string }`. `kind` is required and defaults to your own harness. `model` runs the child on a specific model; omitted, the harness's default applies — when you choose one, pick the cheapest model that can solve the task. `effort` sets the child's reasoning effort (pi: off|minimal|low|medium|high|xhigh|max; claude: low|medium|high|xhigh|max); omitted, the harness's default applies. Pass `body` (wrapped in `<supervisor-agent>…</supervisor-agent>`) to send the task in the same call, or `body_file` with a path to a file whose content is the body (absolute, or relative to the cwd). Returns `{ pane_id, tab_id }` — keep both.",
     "`agent` (spawn only) runs the child under a named agent definition: the child's system prompt is set from the definition automatically, at spawn. Pass only the name — never a path, never the definition pasted into `body`, and never an instruction for the child to read the file." +
       (harness === "pi" ? " On pi, definitions are `.md` files under the project's `.pi/agents/`." : ""),
     "`prompt`: options `{ pane_id: string, body: string }` or `{ pane_id: string, body_file: string }`. Follow-up prompts to a spawned child. Wrap the body in `<supervisor-agent>…</supervisor-agent>` so the child knows it is a supervisor directive.",
